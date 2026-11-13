@@ -1,6 +1,6 @@
 # Novedades de Nexura DJ Studio
 
-## 1.0.0-rc.4 · en preparación
+## 1.0.0-rc.4 · noviembre de 2026
 
 ### Limpiar biblioteca
 - Nueva herramienta para poner orden en tu música con un botón: **🧹 Limpiar** en «Todas las pistas» (también en el menú **≡** de la biblioteca y en **? → Herramientas**). Revisa toda la biblioteca o solo la crate abierta, en segundo plano y sin cortar la música: si suena algo, va más despacio. La segunda vez es casi instantánea.
