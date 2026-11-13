@@ -90,7 +90,7 @@ export class AutoplayUI {
         el('small', {}, o.order === 'list' && ui.current() && (ui.cursor >= 0 || ui.sel.size) ? `Empieza por «${ui.current().title || '—'}» (la seleccionada)` : 'El orden es el de la tabla (columna y dirección incluidas)'));
     this.statusEl = el('div', { class: 'ap-status' }, ap.enabled ? ap.status() : 'Parado');
     const start = btn(ap.enabled ? '▶ Empezar de nuevo' : '▶ Empezar', { cls: 'small primary', title: 'Empieza con la vista abierta en la biblioteca', onClick: () => ap.start() });
-    const next = btn('Siguiente ⏭', { cls: 'small', title: 'Pasar ya a la siguiente (Ctrl+→)', onClick: () => ap.skip() });
+    const next = btn('Siguiente »', { cls: 'small', title: 'Pasar ya a la siguiente (Ctrl+→)', onClick: () => ap.skip() });
     const stop = btn('■ Parar', { cls: 'small', title: 'Parar el Autoplay (la canción actual sigue sonando) · Mayús+F7', onClick: () => ap.stop() });
     next.disabled = stop.disabled = !ap.enabled;
     if (!n && !ap.enabled) start.disabled = true;

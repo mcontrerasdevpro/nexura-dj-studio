@@ -38,10 +38,14 @@ const ICON = {
   closed: 'M9 6l6 6-6 6',
   rail: 'M4 5h16v14H4z M9 5v14'
 };
-const ICON_COLOR = { lib: '#e8f0ff', ai: '#c792ff', prep: '#4fd1e8', hist: '#9fb2d4', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
+// Todas, Prepare e Historial en gris del tema; IA morado, crates ámbar, smart verde, YouTube rojo y Spotify verde
+const ICON_COLOR = { lib: 'var(--ico-lib)', ai: '#c792ff', prep: 'var(--ico-prep)', hist: 'var(--ico-hist)', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
 function icon(name, size = 18, color = null, width = 2, cls = 'ico') {
   const NS = 'http://www.w3.org/2000/svg', s = document.createElementNS(NS, 'svg'), p = document.createElementNS(NS, 'path');
-  for (const [k, v] of Object.entries({ class: cls, width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: color || 'currentColor', 'stroke-width': width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v);
+  // un color var(--…) no vale como atributo de SVG: va en el estilo
+  const cssVar = /^var\(/.test(color || '');
+  for (const [k, v] of Object.entries({ class: cls, width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: (!cssVar && color) || 'currentColor', 'stroke-width': width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v);
+  if (cssVar) s.style.stroke = color;
   p.setAttribute('d', ICON[name] || '');
   s.appendChild(p);
   return s;
