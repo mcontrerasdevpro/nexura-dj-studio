@@ -19,6 +19,9 @@ export const RANGES = [0.08, 0.16, 0.5];
 export const fmtBeats = (b) => b >= 1 ? String(Math.round(b * 1000) / 1000) : '1/' + Math.round(1 / b);
 
 const SEC_PER_REV = 60 / 33.333; // un giro de plato = 1,8 s de audio a 33⅓ rpm
+const YT_SYNC_MSG = 'SYNC no está disponible con vídeos de YouTube: el reproductor oficial no permite ajustar el tempo ni la fase con precisión. Iguala el tempo con el pitch.';
+const frac = (x) => ((x % 1) + 1) % 1;
+const wrapHalf = (x) => (x > 0.5 ? x - 1 : x < -0.5 ? x + 1 : x);
 
 export class Deck extends Emitter {
   constructor(app, idx) {
@@ -29,9 +32,8 @@ export class Deck extends Emitter {
     const ctx = this.engine.ctx;
     // salida 0 = deck; salida 1 = stems enviados a FX (Stems FX)
     this.node = new AudioWorkletNode(ctx, 'nexura-deck', { numberOfInputs: 0, numberOfOutputs: 2, outputChannelCount: [2, 2] });
-    this.node.connect(this.engine.channels[idx].input, 0);
-    this.node.connect(this.engine.channels[idx].stemIn, 1);
     this.node.port.onmessage = (e) => this.onWorklet(e.data);
+    this.connected = false;
 
     this.track = null;
     this.sr = 44100;
@@ -47,6 +49,9 @@ export class Deck extends Emitter {
     this.slip = false;
     this.vinyl = true;
     this.sync = false;
+    this.syncCorr = 0;       // corrección de fase del sync (fracción de tempo, ±2 %)
+    this.syncMult = 1;       // beats de este deck por beat del maestro (×2 / ½ con BPM muy distintos)
+    this.lastNudgeAt = 0;
     this.cuePoint = 0;
     this.cuePreview = false;
     this.loop = { on: false, s: 0, e: 0 };
@@ -73,6 +78,15 @@ export class Deck extends Emitter {
   }
 
   send(m, transfer) { this.node.port.postMessage(m, transfer || []); }
+  // Sin pista (decks 3 y 4 casi siempre), el reproductor no se conecta al mezclador: si no, su canal
+  // (EQ, filtros, medidores) procesaría silencio sin parar
+  setConnected(on) {
+    if (on === this.connected) return;
+    this.connected = on;
+    const ch = this.engine.channels[this.idx];
+    if (on) { this.node.connect(ch.input, 0); this.node.connect(ch.stemIn, 1); }
+    else { try { this.node.disconnect(); } catch (_) { /* ya desconectado */ } }
+  }
   applyMotor() {
     const s = this.app.settings;
     this.send({ t: 'motor', start: (s.motorStart ?? 4) / 1000, stop: (s.motorStop ?? 4) / 1000 });
@@ -83,7 +97,8 @@ export class Deck extends Emitter {
   gridEditable() { return this.app.library.guard('grid'); }
 
   onWorklet(m) {
-    if (m.t === 's') { this.st = { pos: m.pos / this.sr, sp: m.sp, at: performance.now() }; }
+    // f = muestra de audio del informe (para comparar decks en el mismo instante); lat = retardo del key lock
+    if (m.t === 's') { this.st = { pos: m.pos / this.sr, sp: m.sp, at: performance.now(), f: m.f, lat: m.lat || 0 }; }
     else if (m.t === 'ended') { this.playing = false; this.emit('state'); }
   }
 
@@ -120,6 +135,7 @@ export class Deck extends Emitter {
 
   // ---------------------------------------------------------------- carga
   async load(track, buffer) {
+    this.app.syncMgr?.beforeLoad(this);
     this.stopAll();
     this.unloadYT();
     this.stemsOn = false; this.stemGains = [1, 1, 1, 1]; this.resetStemFx();
@@ -129,13 +145,17 @@ export class Deck extends Emitter {
     this.duration = buffer.duration;
     const L = buffer.getChannelData(0).slice();
     const R = buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : null;
-    this.send({ t: 'load', L, R, sr: buffer.sampleRate });
+    // las copias se transfieren al worklet (sin una tercera copia de la pista en memoria)
+    this.send({ t: 'load', L, R, sr: buffer.sampleRate }, R ? [L.buffer, R.buffer] : [L.buffer]);
+    this.setConnected(true);
     this.afterLoad();
   }
 
   async loadYouTube(track) {
+    this.app.syncMgr?.beforeLoad(this);
     this.stopAll();
     this.send({ t: 'unload' });
+    this.setConnected(false);
     this.track = track;
     this.isYT = true;
     if (!this.yt) {
@@ -175,7 +195,9 @@ export class Deck extends Emitter {
       this.engine.channels[this.idx].set('trim', 0.5 + g / 24);
       this.app.emit('mixerSync');
     }
-    if (!this.sync) this.setTempo(1 + this.pitch * this.range);
+    this.syncCorr = 0;
+    if (this.sync && this.isYT) { this.sync = false; this.app.toast(YT_SYNC_MSG, 'warn', 6000); }
+    if (!this.followsMaster()) this.setTempo(1 + this.pitch * this.range);
     else this.syncNow(true);
     this.emit('track', t);
     this.emit('state');
@@ -273,6 +295,7 @@ export class Deck extends Emitter {
     if (this.playing) return;
     this.stopAll();
     this.send({ t: 'unload' });
+    this.setConnected(false);
     this.stemsOn = false; this.stemGains = [1, 1, 1, 1]; this.resetStemFx();
     if (this.yt) this.yt.destroy(), this.yt = null;
     this.track = null; this.isYT = false; this.duration = 0;
@@ -294,8 +317,9 @@ export class Deck extends Emitter {
     this.playing = true;
     this.cuePreview = false;
     if (this.isYT) this.yt.play(); else this.send({ t: 'play', v: true });
-    if (this.sync) this.syncNow(true);
     this.playStartedAt = performance.now();
+    this.app.syncMgr?.onPlay(this);
+    if (this.sync) this.syncNow(true);
     this.emit('state');
   }
   pause() {
@@ -304,17 +328,21 @@ export class Deck extends Emitter {
     this.emit('state');
   }
   togglePlay() { this.playing ? this.pause() : this.play(); }
-  seek(t, keepSlip = false) {
+  // xf: fundido corto en el salto (realinear la fase sonando sin clic)
+  seek(t, keepSlip = false, xf = false) {
     if (!this.track) return;
     t = clamp(t, 0, Math.max(0, this.duration - 0.01));
     if (this.isYT) this.yt.seek(t);
-    else this.send({ t: 'seek', v: t * this.sr });
-    this.st = { pos: t, sp: this.st.sp, at: performance.now() };
+    else this.send({ t: 'seek', v: t * this.sr, xf });
+    // posición conocida desde ya (hasta el próximo informe del worklet): sin muestra de audio de referencia
+    this.st = { pos: t, sp: this.st.sp, at: performance.now(), f: undefined, lat: this.st.lat || 0 };
     if (!keepSlip) this.emit('seek');
   }
-  // salto manteniendo la fase del beat si la cuantización está activa y se reproduce
+  // salto manteniendo la fase: con SYNC, la del maestro; si no, la del beat actual si la cuantización está activa
   jumpTo(t) {
-    if (this.app.settings.quantize && this.playing && this.bpm) {
+    const m = this.sync && this.playing ? this.syncMaster : null;
+    if (m && this.bpm && !this.isYT) t = this.phaseTarget(t, m);
+    else if (this.app.settings.quantize && this.playing && this.bpm) {
       const now = this.time;
       t = t + (now - this.nearestBeat(now));
     }
@@ -349,77 +377,137 @@ export class Deck extends Emitter {
   toStart() { this.pause(); this.seek(0); }
 
   // ---------------------------------------------------------------- tempo
+  // ¿sigue el tempo de otro deck? (SYNC activo y hay un maestro que no es él)
+  followsMaster() { return this.sync && !!this.syncMaster; }
   setPitchFader(v) { // −1..1
+    const prev = this.pitch;
     this.pitch = clamp(v, -1, 1);
-    if (!this.sync) this.setTempo(1 + this.pitch * this.range);
+    const m = this.sync ? this.syncMaster : null;
+    if (m) {
+      // con SYNC, mover el pitch cambia el tempo de todo el grupo (el maestro y, con él, los sincronizados)
+      // en la misma proporción: nada salta ni se desfasa, aunque el fader no esté en el sitio del tempo
+      const f = (1 + this.pitch * this.range) / (1 + prev * this.range);
+      if (Math.abs(f - 1) > 1e-7) {
+        m.setTempo(m.tempo * f);
+        m.pitch = clamp((m.tempo - 1) / m.range, -1, 1);
+        m.emit('tempo');
+        this.syncNow(false);
+      }
+    } else this.setTempo(1 + this.pitch * this.range);
     this.emit('tempo');
   }
   cycleRange() {
     const i = RANGES.indexOf(this.range);
     this.range = RANGES[(i + 1) % RANGES.length];
-    if (!this.sync) this.setTempo(1 + this.pitch * this.range);
+    if (!this.followsMaster()) this.setTempo(1 + this.pitch * this.range);
     this.emit('tempo');
   }
-  setRange(r) { this.range = r; if (!this.sync) this.setTempo(1 + this.pitch * this.range); this.emit('tempo'); }
+  setRange(r) { this.range = r; if (!this.followsMaster()) this.setTempo(1 + this.pitch * this.range); this.emit('tempo'); }
   setTempo(t) {
-    this.tempo = clamp(t, 0.25, 2.5);
+    const v = clamp(t, 0.25, 2.5), changed = v !== this.tempo;
+    this.tempo = v;
     if (this.isYT) { if (this.yt) this.yt.setRate(this.tempo); }
-    else this.send({ t: 'rate', v: this.tempo });
-    this.emit('tempo');
+    else this.sendRate();
+    if (changed) this.emit('tempo');
+  }
+  // al worklet: tempo × (1 + corrección de fase del sync)
+  sendRate() {
+    const v = this.tempo * (1 + this.syncCorr);
+    if (v !== this._rateSent) { this._rateSent = v; this.send({ t: 'rate', v }); }
   }
   resetTempo() { this.pitch = 0; this.setTempo(1); this.emit('tempo'); }
   setBend(v) { this.bend = v; if (!this.isYT) this.send({ t: 'bend', v }); }
   bendDown(dir, coarse = false) { this.setBend(dir * (coarse ? 0.12 : 0.04)); }
-  bendUp() { this.setBend(0); }
-  nudge(v) { if (!this.isYT) this.send({ t: 'nudge', v }); }
+  bendUp() { this.setBend(0); this.lastNudgeAt = performance.now(); }
+  nudge(v) { if (!this.isYT) { this.lastNudgeAt = performance.now(); this.send({ t: 'nudge', v }); } }
 
   // ---------------------------------------------------------------- sync
-  get syncMaster() {
-    const others = (this.app.activeDecks || this.app.decks).filter(d => d !== this && d.track && d.bpm);
-    if (!others.length) return null;
-    return others.find(d => !d.sync) || others[0];
-  }
+  // Maestro (src/js/audio/sync.js): uno solo para todos; el primero que suena o el elegido con MASTER
+  get syncMaster() { return this.app.syncMgr ? this.app.syncMgr.master(this) : null; }
+  get isSyncMaster() { return !!(this.app.syncMgr && this.app.syncMgr.isMaster(this)); }
   setSync(on) {
+    if (on && this.isYT) { this.sync = false; this.app.toast(YT_SYNC_MSG, 'warn', 6000); this.emit('state'); return; }
     this.sync = !!on;
-    if (this.sync) this.syncNow(true);
+    this.syncCorr = 0; this.sendRate();
+    if (this.sync) { this.app.syncMgr?.ensure(this); this.syncNow(true); }
     else { this.pitch = clamp((this.tempo - 1) / this.range, -1, 1); }
     this.emit('state'); this.emit('tempo');
   }
   toggleSync() { this.setSync(!this.sync); }
+  // Iguala el tempo con el del maestro (con ×½ / ×2 si el BPM es muy distinto) y, con `phase`, alinea la fase
   syncNow(phase = false) {
     const m = this.syncMaster;
-    if (!m || !this.bpm || !m.bpm) return;
-    let target = m.currentBpm / this.bpm;
-    // elige ×½ / ×2 si queda más cerca de 1
-    for (const f of [0.5, 2]) if (Math.abs(target * f - 1) < Math.abs(target - 1)) target *= f;
+    if (!m || !this.bpm || !m.bpm || this.isYT) return;
+    let target = m.currentBpm / this.bpm, k = 1;
+    for (const f of [0.5, 2]) if (Math.abs(target * f - 1) < Math.abs(target - 1)) { target *= f; k = f; }
+    this.syncMult = k;
     this.setTempo(target);
     if (phase && this.app.settings.syncPhase !== false) this.alignPhase(m);
   }
+  // Posición que se oye (s de pista) en la muestra de audio F: el informe del worklet extrapolado hasta F,
+  // menos el retardo del key lock. Sin muestra de referencia (justo tras un salto), por el reloj.
+  audibleAt(F) {
+    const st = this.st, sr = this.engine.ctx.sampleRate;
+    const df = st.f != null && F != null ? F - st.f : Math.min((performance.now() - st.at) / 1000, 0.05) * sr;
+    return st.pos + st.sp * (df - (st.lat || 0)) / sr;
+  }
+  // Error de fase respecto al maestro en segundos de esta pista (> 0: este deck va por detrás), comparando
+  // los dos decks en el mismo instante de audio
+  phaseError(m = this.syncMaster, k = this.syncMult || 1) {
+    if (!m || !this.bpm || !m.bpm) return 0;
+    const F = this.st.f != null && m.st.f != null ? Math.max(this.st.f, m.st.f) : null;
+    const me = this.audibleAt(F), mt = m.audibleAt(F);
+    const d = wrapHalf(frac(m.beatAt(mt) * k) - frac(this.beatAt(me)));
+    return d * 60 / (this.hasGridMarkers ? Grid.bpmAt(this.track, me) : this.track.bpm);
+  }
+  // Posición a la que saltar (cerca de t) para quedar en fase con el maestro
+  phaseTarget(t, m = this.syncMaster) {
+    const F = this.st.f != null && m.st.f != null ? Math.max(this.st.f, m.st.f) : null;
+    const want = frac(m.beatAt(m.audibleAt(F)) * (this.syncMult || 1));
+    const lag = (this.st.lat || 0) * Math.abs(this.st.sp || this.tempo) / this.engine.ctx.sampleRate;
+    const b = this.beatAt(t - lag);
+    return this.beatTime(Math.round(b - want) + want) + lag;
+  }
+  // Salto relativo (exacto aunque el worklet lo reciba unos milisegundos después) con fundido si suena
   alignPhase(m = this.syncMaster) {
     if (!m || !this.bpm || this.isYT) return;
-    const ratio = m.bpm * m.tempo / (this.bpm * this.tempo);
-    const mult = ratio > 1.4 ? 2 : ratio < 0.7 ? 0.5 : 1; // compás doble/mitad
-    const mp = ((m.beatAt(m.time) / mult) % 1 + 1) % 1;
-    const myB = this.beatAt(this.time);
-    let diff = mp - ((myB % 1) + 1) % 1;
-    if (diff > 0.5) diff -= 1;
-    if (diff < -0.5) diff += 1;
-    if (Math.abs(diff * this.beatLen) > 0.004) this.seek(this.time + diff * this.beatLen, true);
-  }
-  // Corrección continua de deriva (llamada periódicamente)
-  syncTick() {
-    if (!this.sync || !this.playing || this.isYT) return;
-    const m = this.syncMaster;
-    if (!m || !m.playing || m.isYT) return;
-    this.syncNow(false);
-    const myB = this.beatAt(this.time), mb = m.beatAt(m.time);
-    let diff = ((mb % 1) + 1) % 1 - ((myB % 1) + 1) % 1;
-    if (diff > 0.5) diff -= 1;
-    if (diff < -0.5) diff += 1;
-    const errSec = diff * this.beatLen;
-    if (Math.abs(errSec) > 0.008 && Math.abs(errSec) < 0.2 && !this.loop.on && this.bend === 0) {
-      this.send({ t: 'nudge', v: clamp(errSec * 2, -0.05, 0.05) });
+    const e = this.phaseError(m);
+    if (Math.abs(e) > 0.001) {
+      this.send({ t: 'seekBy', v: e * this.sr, xf: this.playing });
+      this.st = { ...this.st, pos: clamp(this.st.pos + e, 0, this.duration), f: undefined, at: this.st.at };
     }
+    this.syncCorr = 0; this.sendRate();
+  }
+  // Corrección continua (cada SYNC_TICK_MS): tempo del maestro y fase con un ajuste fino de velocidad
+  // (como mucho ±2 %, se nota menos que un salto); si el desfase pasa de 35 ms (salto, nudge…), realinea
+  // con un salto con fundido. Mientras se toca el plato, el pitch bend o el nudge, no corrige.
+  syncTick() {
+    const m = this.sync && !this.isYT ? this.syncMaster : null;
+    if (!m) { if (this.syncCorr) { this.syncCorr = 0; this.sendRate(); } return; }
+    this.syncNow(false); // sigue los cambios de tempo del maestro (y los tramos de un grid variable)
+    const now = performance.now();
+    const touching = this.scratching || this.bend !== 0 || now - this.lastNudgeAt < 400;
+    if (!this.playing || !m.playing || touching || this.st.f == null || m.st.f == null) {
+      if (this.syncCorr) { this.syncCorr = 0; this.sendRate(); }
+      return;
+    }
+    const e = this.phaseError(m);
+    if (Math.abs(e) > 0.035) {
+      if (now - (this._realignAt || 0) > 300) { this._realignAt = now; this.alignPhase(m); }
+      return;
+    }
+    this.syncCorr = clamp(e * 3, -0.02, 0.02);
+    this.sendRate();
+  }
+  // Para el medidor de fase: desfase (ms) respecto al maestro (o al deck que suena) y si está en fase
+  phaseInfo() {
+    if (!this.track || !this.bpm || this.isYT) return null;
+    const mgr = this.app.syncMgr, ref = mgr ? mgr.master(this) : null;
+    if (!ref || !ref.playing) return null;
+    let k = this.syncMult || 1;
+    if (!this.sync) { const r = ref.currentBpm / (this.currentBpm || 1); k = r > 1.4 ? 0.5 : r < 0.7 ? 2 : 1; }
+    const e = this.phaseError(ref, k);
+    return { ms: e / (this.tempo || 1) * 1000, beat: e / (60 / this.bpm), master: ref };
   }
 
   // ---------------------------------------------------------------- keylock / tonalidad

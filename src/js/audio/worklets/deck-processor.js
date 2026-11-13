@@ -7,8 +7,12 @@
 // Pitch-shifter por segmentos con empalme por correlación (estilo WSOLA/SoundTouch).
 // Un cabezal lee la línea de retardo con un retardo d que deriva (1 - factor) por muestra; cuando
 // sale del rango [dMin, dMax] se busca, por correlación, el retardo nuevo cuya forma de onda encaja
-// mejor con la que estaba sonando y se funde en ~10 ms. Así hay pocos empalmes (cada 40-500 ms
+// mejor con la que estaba sonando y se funde en ~10 ms. Así hay pocos empalmes (cada 0,25-4 s
 // según el tempo) y todos en fase: sin el «flanger» ni el trémolo de los granulados de 2 cabezales.
+// Entre empalmes lo que suena avanza a velocidad 1 (por eso conserva el tono): el ritmo que se oye se separa
+// del de la pista tanto como d se separa de su media. Con un margen de 20 ms (antes 45) esa separación queda
+// en ±10 ms como mucho (antes ±22; con SYNC + key lock los golpes se oían hasta 55 ms desfasados), con la
+// misma variación de nivel medida; la latencia media (`lat`, ~20 ms en vez de ~35) la descuenta el sync.
 class PitchShifter {
   constructor() {
     this.N = 32768; this.mask = this.N - 1;
@@ -16,11 +20,11 @@ class PitchShifter {
     this.w = 0;
     this.X = Math.round(sampleRate * 0.010);     // fundido del empalme (10 ms)
     this.S = Math.round(sampleRate * 0.0125);    // ventana de búsqueda (±12,5 ms ≥ un periodo de 80 Hz)
-    this.RANGE = Math.round(sampleRate * 0.045); // margen de deriva entre empalmes
+    this.RANGE = Math.round(sampleRate * 0.020); // margen de deriva entre empalmes
     this.d = 0; this.d2 = 0; this.x = -1;         // x ≥ 0: empalme en curso (muestras hechas)
     this.reset();
   }
-  reset() { this.L.fill(0); this.R.fill(0); this.x = -1; this.d = this.center(1); }
+  reset() { this.L.fill(0); this.R.fill(0); this.x = -1; this.d = this.center(1); this.avg = this.d; }
   bounds(f) { const dMin = Math.ceil(this.X * Math.max(1, Math.min(f, 6))) + 64; return [dMin, dMin + this.RANGE]; }
   center(f) { const [a, b] = this.bounds(f); return (a + b) / 2; }
   read(buf, delay) {
@@ -178,13 +182,18 @@ class DeckProcessor extends AudioWorkletProcessor {
       case 'rate': this.rate = m.v; break;
       case 'bend': this.bend = m.v; break;
       case 'nudge': this.nudge += m.v; break;
-      case 'seek':
-        this.pos = Math.max(0, Math.min(this.len - 1, m.v));
-        this.xfN = 0;
+      case 'seek': case 'seekBy': {
+        // seekBy: salto relativo (fase del sync), exacto aunque llegue unos milisegundos después de pedirlo
+        const to = Math.max(0, Math.min(this.len - 1, m.t === 'seekBy' ? this.pos + m.v : m.v));
+        // xf: salto corto sonando (realinear la fase del sync) → fundido de 6 ms desde lo que sonaba, sin clic
+        if (m.xf && this.playing && !this.scratch && Math.abs(to - this.pos) > 64) { this.xfPos = this.pos; this.xfN = this.xfLen = Math.round(0.006 * sampleRate); }
+        else this.xfN = 0;
+        this.pos = to;
         if (!this.slipping) this.shadow = this.pos;
         this.ended = false;
         if (this.scratch) this.scratchTarget = this.pos;
         break;
+      }
       case 'loop':
         this.loopOn = !!m.on;
         if (m.s != null) { this.loopS = m.s; this.loopE = m.e; }
@@ -346,10 +355,14 @@ class DeckProcessor extends AudioWorkletProcessor {
       } else if (this.pos < 0) this.pos = 0;
     }
     if (!this.slipping) this.shadow = this.pos;
+    // latencia media del pitch-shifter (≈ 2 s): lo que se oye va `lat` muestras de salida por detrás de `pos`
+    if (wantPS || this.psMix > 0) this.ps.avg += (this.ps.d - this.ps.avg) * 0.0013;
 
     if (++this.tick >= 3) {
       this.tick = 0;
-      this.port.postMessage({ t: 's', pos: this.pos, sp: this.cur, sh: this.shadow, sl: this.slipping });
+      // f = muestra de audio de este instante: la interfaz compara los decks en el mismo instante exacto
+      const f = typeof currentFrame === 'number' ? currentFrame + n : undefined; // (sin él en pruebas de Node antiguas)
+      this.port.postMessage({ t: 's', pos: this.pos, sp: this.cur, sh: this.shadow, sl: this.slipping, f, lat: this.psMix * this.ps.avg });
     }
     return true;
   }

@@ -86,7 +86,12 @@ app.whenReady().then(async () => {
     s = await js(win, `(() => { const b = [...document.querySelectorAll('.ctx-item')].find(x => x.textContent.trim() === 'Novedades de esta versión'); if (!b) return false; b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return true; })()`);
     await wait(700);
     const notes = await js(win, `(() => { const n = document.querySelector('.notes'); return n ? { h3: n.querySelectorAll('h3').length, li: n.querySelectorAll('li').length } : null; })()`);
-    check('Menú «?» → «Novedades de esta versión» abre las notas', s === true && notes && notes.h3 >= 3 && notes.li >= 8, { s, notes });
+    check('Menú «?» → «Novedades de esta versión» abre las notas', s === true && notes && notes.h3 >= 1 && notes.li >= 1, { s, notes });
+    // el contenido de la rc.2 se comprueba en su propia sección, buscada por su versión (no la primera del archivo)
+    await js(win, `nexuraApp.closeModal(); nexuraApp.notes.show('1.0.0-rc.2'); true`);
+    await wait(700);
+    const rc2 = await js(win, `(() => { const m = [...document.querySelectorAll('.modal')].pop(); const n = m && m.querySelector('.notes'); return n ? { text: m.textContent, h3: n.querySelectorAll('h3').length, li: n.querySelectorAll('li').length } : null; })()`);
+    check('Notas de la 1.0.0-rc.2 (por su versión): apartados, puntos y «Comprobar clave»', rc2 && rc2.text.includes('1.0.0-rc.2') && rc2.h3 >= 3 && rc2.li >= 8 && /Comprobar clave/.test(rc2.text), rc2 && { h3: rc2.h3, li: rc2.li });
     s = await js(win, fits);
     check('Novedades caben en la pantalla', ok(s), s);
     await shot(win, `14-web-novedades-${tag}`);

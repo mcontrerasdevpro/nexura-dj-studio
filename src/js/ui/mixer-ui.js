@@ -107,11 +107,16 @@ export class MixerUI {
     else if (s[name] && s[name].set) s[name].set(v, true);
   }
 
+  // Vúmetros: la barra recorta su parte de arriba (clip-path, sin recalcular la maquetación como con `height`)
+  // y solo se toca si el nivel cambia al menos un 1 %
   frame() {
     const m = this.app.engine.meters();
-    m.ch.forEach((p, i) => { this.strips[i].meter.firstChild.style.height = (peakToMeter(p) * 100) + '%'; });
-    this.mL.firstChild.style.height = (peakToMeter(m.L) * 100) + '%';
-    this.mR.firstChild.style.height = (peakToMeter(m.R) * 100) + '%';
+    const set = (meter, p) => {
+      const v = Math.round(peakToMeter(p) * 100), f = meter.firstChild;
+      if (f._v !== v) { f._v = v; f.style.clipPath = `inset(${100 - v}% 0 0 0)`; }
+    };
+    m.ch.forEach((p, i) => { if (this.strips[i]) set(this.strips[i].meter, p); });
+    set(this.mL, m.L); set(this.mR, m.R);
     const clip = Math.max(m.L, m.R) >= 0.99;
     if (clip) this.clipUntil = performance.now() + 600;
     this.clip.classList.toggle('on', performance.now() < (this.clipUntil || 0));

@@ -489,7 +489,17 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 .row.flip-row .sel { width: 52px; }
 .sizepick { display: inline-flex; align-items: center; gap: 2px; }
 .master-ind { font-size: 9px; font-weight: 800; letter-spacing: .08em; color: var(--dim); padding: 2px 5px; border-radius: var(--radius); border: 1px solid var(--line2); }
-.master-ind.on { color: var(--deck-badge-text); background: var(--dc); border-color: var(--dc); }
+.btn.master-ind { cursor: pointer; }
+/* MASTER es un botón: gana a «.deck .btn.on» (gris del tema) para ir siempre en el color de identidad del deck */
+.master-ind.on, .deck .btn.master-ind.on { color: var(--deck-badge-text); background: var(--dc); border-color: var(--dc); }
+/* medidor de fase (junto al BPM): punto en el centro = en fase (verde); ámbar/rojo a un lado = desfase */
+.phase-meter { position: relative; width: 64px; height: 8px; margin: 3px 0 0 auto; border-radius: 4px; background: var(--panel2); border: 1px solid var(--line2); }
+.phase-meter.off { visibility: hidden; }
+.phase-meter .pm-c { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--line2); }
+.phase-meter .pm-dot { position: absolute; left: 50%; top: 1px; width: 8px; height: 4px; margin-left: -4px; border-radius: 2px; background: var(--err); }
+.phase-meter[data-state="ok"] .pm-dot { background: var(--ok); }
+.phase-meter[data-state="ok"] .pm-c { background: var(--ok); }
+.phase-meter[data-state="warn"] .pm-dot { background: var(--warn); }
 .btn.q.on { background: rgba(240, 169, 42, .2); border-color: var(--warn); }
 .btn.loop.on { background: var(--ok-bg); border-color: var(--ok); }
 
@@ -521,7 +531,8 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 .fader-meter { display: flex; gap: 6px; align-items: stretch; margin-top: 2px; }
 .meter { width: 7px; background: var(--wave-bg); border-radius: 3px; position: relative; overflow: hidden; border: 1px solid var(--line); }
 .meter.tall { width: 9px; height: 96px; }
-.meter-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(to top, #43b649 0%, #43b649 65%, #f0a92a 82%, #e8413a 96%); background-size: 100% var(--mh, 150px); background-position: bottom; transition: height .05s linear; }
+/* la barra ocupa todo el vúmetro y se recorta por arriba (clip-path desde mixer-ui.js): sin maquetación por frame */
+.meter-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 100%; clip-path: inset(100% 0 0 0); background: linear-gradient(to top, #43b649 0%, #43b649 65%, #f0a92a 82%, #e8413a 96%); background-size: 100% var(--mh, 150px); background-position: bottom; }
 .meter.tall .meter-fill { --mh: 96px; }
 .strip.s0 .meter-fill { background: var(--meter0); background-size: 100% var(--mh, 150px); background-position: bottom; }
 .strip.s1 .meter-fill { background: var(--meter1); background-size: 100% var(--mh, 150px); background-position: bottom; }
@@ -982,6 +993,8 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 
 /* 12. Ajustes -------------------------------------------------------------- */
 .settings { display: grid; grid-template-columns: 170px 1fr; gap: 16px; width: min(880px, 86vw); min-height: 460px; }
+.gpu-state { font-weight: 700; color: var(--warn); }
+.gpu-state.ok { color: var(--ok); }
 .set-nav { display: flex; flex-direction: column; gap: 3px; }
 .set-tab { text-align: left; background: transparent; border: 0; padding: 8px 10px; border-radius: var(--radius); color: var(--muted); cursor: pointer; font-weight: 600; }
 .set-tab.on { background: var(--panel3); color: #fff; }
@@ -1071,6 +1084,14 @@ body.laptop-mode .deck.d0 .deck-body { grid-template-columns: minmax(0, 1fr) 140
 body.laptop-mode .pad { height: 30px; }
 body.laptop-mode .deck-detail-wave { height: 60px; }
 /* la biblioteca muestra la barra de iconos (settings.libRail = Automática; library-ui.js) */
+/* Modo rendimiento (Ajustes → Audio): onda a 30 fps (app.js), sin animaciones, sin brillos ni desenfoques */
+body.perf-mode .btn.rec.on, body.perf-mode .pad.cueloop.active::after, body.perf-mode .side-group.flash,
+body.perf-mode .upd-ind.pulse, body.perf-mode .btn.upd-top.pulse, body.perf-mode .layer-tabs .layer-tab.playing:not(.on) { animation: none; }
+body.perf-mode .btn.automix-btn.on, body.perf-mode .btn.autoplay-btn.on, body.perf-mode .btn.autoplay-lib.on, body.perf-mode .btn.sync.on, body.perf-mode .btn.q.on,
+body.perf-mode .btn.play.on, body.perf-mode .btn.cue.on, body.perf-mode .pad.lit, body.perf-mode .btn.fxon.on, body.perf-mode .smp-play.playing,
+body.perf-mode .wave-layout-toggle button.on { box-shadow: none; }
+body.perf-mode .d-bpm b, body.perf-mode .pad-label { text-shadow: none; }
+body.perf-mode .modal-ov { backdrop-filter: none; }
 
 /* 15. Diseño responsivo ---------------------------------------------------- */
 /* Ancho ≤ 1500: decks más compactos */
