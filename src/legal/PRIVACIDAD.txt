@@ -32,6 +32,9 @@ Si no has puesto tu propia clave de YouTube en Ajustes → YouTube, la búsqueda
 
 e) Servicios que usas tú expresamente: al reproducir vídeos de YouTube o importar listas de Spotify, la app se conecta con esos servicios, que tratan tus datos según sus propias políticas (Google y Spotify). Lo mismo con el asistente de IA si configuras Ollama (funciona en tu propio equipo).
 
+f) «Buscar en internet» de la herramienta Limpiar biblioteca (solo cuando lo pulsas).
+Para completar etiquetas y carátulas se consultan las bases de datos libres MusicBrainz y Cover Art Archive (MetaBrainz Foundation) con el artista y el título de las canciones que estás revisando. No se envían tus archivos, rutas ni datos personales; esos servicios reciben tu dirección IP como en cualquier consulta web. NexuraIA no recibe nada.
+
 3. CONSERVACIÓN Y DESTINATARIOS
 Los informes y sugerencias se conservan mientras sean útiles para resolver el problema o la propuesta, y como máximo 2 años. Las estadísticas se guardan de forma agregada. Para recibirlos, NexuraIA puede usar proveedores de alojamiento y automatización que actúan como encargados del tratamiento. No vendemos ni cedemos tus datos.
 

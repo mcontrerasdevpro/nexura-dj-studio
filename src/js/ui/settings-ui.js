@@ -11,7 +11,7 @@ import { THEMES } from './theme.js';
 
 const TABS = { general: 'General', audio: 'Audio', ai: '✨ IA', play: 'Reproducción', library: 'Biblioteca', midi: 'MIDI / Controladores', expansions: 'Expansiones', youtube: 'YouTube', spotify: 'Spotify', keys: 'Atajos', about: 'Acerca de' };
 const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
-const BACKUP_REASONS = { auto: 'Automática', manual: 'Manual', actualizacion: 'Antes de actualizar', 'antes-de-restaurar': 'Antes de restaurar' };
+const BACKUP_REASONS = { auto: 'Automática', manual: 'Manual', actualizacion: 'Antes de actualizar', 'antes-de-restaurar': 'Antes de restaurar', limpieza: 'Antes de limpiar la biblioteca' };
 
 export class SettingsUI {
   constructor(app) { this.app = app; this.tab = 'general'; }

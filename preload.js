@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('nexura', {
   },
   backup: {
     list: () => ipcRenderer.invoke('backup:list'),
-    create: () => ipcRenderer.invoke('backup:create'),
+    create: (reason) => ipcRenderer.invoke('backup:create', reason),
     restore: (name) => ipcRenderer.invoke('backup:restore', name),
     openFolder: () => ipcRenderer.invoke('backup:openFolder')
   },
@@ -53,6 +53,18 @@ contextBridge.exposeInMainWorld('nexura', {
     install: () => ipcRenderer.invoke('update:install'),
     status: () => ipcRenderer.invoke('update:status'),
     onEvent: (fn) => { const h = (_e, ev) => fn(ev); ipcRenderer.on('update:event', h); return () => ipcRenderer.removeListener('update:event', h); }
+  },
+  cleanup: {
+    scan: (entries) => plain(ipcRenderer.invoke('cleanup:scan', entries)),
+    cancel: () => ipcRenderer.invoke('cleanup:cancel'),
+    priority: (v) => ipcRenderer.invoke('cleanup:priority', v),
+    lookup: (queries) => plain(ipcRenderer.invoke('cleanup:lookup', queries)),
+    cover: (releaseId) => ipcRenderer.invoke('cleanup:cover', releaseId),
+    trash: (paths) => plain(ipcRenderer.invoke('cleanup:trash', paths)),
+    restoreTrash: (paths) => plain(ipcRenderer.invoke('cleanup:restoreTrash', paths)),
+    writeTags: (opId, writes) => plain(ipcRenderer.invoke('cleanup:writeTags', opId, writes)),
+    restoreTags: (items) => plain(ipcRenderer.invoke('cleanup:restoreTags', items)),
+    onEvent: (fn) => { const h = (_e, ev) => fn(ev); ipcRenderer.on('cleanup:event', h); return () => ipcRenderer.removeListener('cleanup:event', h); }
   },
   stems: {
     info: (dir) => ipcRenderer.invoke('stems:info', dir),

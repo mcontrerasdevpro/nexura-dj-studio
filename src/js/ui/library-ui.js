@@ -155,11 +155,17 @@ export class LibraryUI {
     this.sideToggle = btn('☰', { cls: 'small lib-side-toggle', title: 'Mostrar u ocultar el árbol de la biblioteca', onClick: () => { this.root.classList.toggle('tree-toggled'); this.placeSideRs(); } });
     this.sideToggle.setAttribute('aria-label', 'Mostrar u ocultar el árbol de la biblioteca');
     this.lockBtn = btn('🔓', { cls: 'small lib-lock', onClick: () => this.app.setSetting('protectLibrary', !this.app.settings.protectLibrary) });
+    // «Limpiar biblioteca»: botón en la cabecera de «Todas las pistas» y menú ≡ en cualquier vista
+    this.cleanBtn = btn('🧹 Limpiar', { cls: 'small lib-clean', title: 'Limpiar biblioteca: duplicados, etiquetas y calidad de los archivos', onClick: () => this.app.cleanupUI.open('all') });
+    this.menuBtn = btn('≡', { cls: 'small lib-menu-btn', title: 'Más acciones de la biblioteca' });
+    this.menuBtn.setAttribute('aria-label', 'Más acciones de la biblioteca');
+    this.menuBtn.addEventListener('click', (e) => { e.stopPropagation(); this.menuAt(this.menuBtn, this.libMenu()); });
     const toolbar = el('div', { class: 'lib-toolbar' },
       this.sideToggle,
       el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.aiMode, this.searchIn, this.lockBtn,
       btn('✨ Pedir set', { cls: 'small ai-btn', title: 'Describe un set con tus palabras y la IA lo crea con tu música', onClick: () => this.app.aiPromptDialog() }),
-      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten (respeta tus BPM corregidos)' }));
+      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten (respeta tus BPM corregidos)' }),
+      this.cleanBtn, this.menuBtn);
     this.head = el('div', { class: 'lib-head', style: { gridTemplateColumns: GRID }, title: 'Clic: ordenar · clic derecho: elegir columnas' });
     this.head.addEventListener('contextmenu', (e) => { e.preventDefault(); this.columnsMenu(e); });
     this.scroller = el('div', { class: 'lib-scroll', tabindex: 0 });
@@ -412,6 +418,16 @@ export class LibraryUI {
     const all = { label: 'Reiniciar pistas tocadas (todas las sesiones)', fn: () => { L.resetPlayed(); this.app.toast('Marcas de pistas tocadas reiniciadas', 'ok'); } };
     return h ? [{ label: 'Reiniciar las de la sesión mostrada', fn: () => { L.resetPlayed(h); this.app.toast('Marcas de la sesión reiniciadas', 'ok'); } }, all] : [all];
   }
+  // Menú ≡ de la barra de la tabla y clic derecho en «Todas las pistas»
+  libMenu() {
+    const v = this.viewId, scoped = !['all', 'everything', 'yt-all', 'ai:next'].includes(v) && !v.startsWith('yt:');
+    return [
+      { label: 'Limpiar biblioteca…', fn: () => this.app.cleanupUI.open('all') },
+      ...(scoped ? [{ label: 'Limpiar solo lo abierto…', fn: () => this.app.cleanupUI.open(v) }] : []),
+      { label: 'Relocalizar archivos perdidos…', fn: () => this.app.relocateMissing() },
+      { label: 'Comprobar archivos perdidos', fn: () => this.checkAllMissing() }
+    ];
+  }
   setHistOpen(open) { this.app.setSetting('libHistOpen', !!open); this.renderSide(); }
   sessionLabel(h) { return new Date(h.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
 
@@ -423,10 +439,7 @@ export class LibraryUI {
     // la vista abierta ya no existe (lista de YouTube borrada o ningún vídeo): a YouTube o a «Todas las pistas»
     const gone = this.viewId === 'yt-all' ? !yt : this.viewId.startsWith('yt:') && !L.ytPlaylists.some(p => 'yt:' + p.id === this.viewId);
     if (gone) this.setView(yt ? 'yt-all' : 'all');
-    const libMenu = [
-      { label: 'Relocalizar archivos perdidos…', fn: () => this.app.relocateMissing() },
-      { label: 'Comprobar archivos perdidos', fn: () => this.checkAllMissing() }
-    ];
+    const libMenu = this.libMenu();
     // BIBLIOTECA: vistas fijas e Historial (plegable, con sus sesiones)
     const lib = [];
     if (hit('Todas las pistas')) lib.push(this.sideItem('all', 'Todas las pistas', local, { icon: 'lib', menu: libMenu }));
@@ -595,6 +608,7 @@ export class LibraryUI {
     const keepId = this.cursor >= 0 && this.rows[this.cursor] ? this.rows[this.cursor].id : null;
     const isAi = this.viewId === 'ai:next';
     this.root.classList.toggle('ai-view', isAi);
+    this.root.classList.toggle('all-view', this.viewId === 'all');
     if (isAi) {
       const q = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
       this.rows = this.app.ai.suggest(80).filter(t => !q.length || q.every(tok => `${t.title} ${t.artist} ${t.genre} ${t.camelot} ${t.bpm ? Math.round(t.bpm) : ''}`.toLowerCase().includes(tok)));
