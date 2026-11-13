@@ -2,9 +2,12 @@
 import { el, fmtTime, CUE_COLORS, clamp, keyColor, DECK_COLORS } from '../util.js';
 import { TC } from './theme.js';
 import { btn, Fader } from './controls.js';
-import { WaveDetail, WaveOverview } from './waveform.js';
+import { WaveDetail, WaveOverview, isShown } from './waveform.js';
 import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES } from '../audio/deck.js';
 import { STEMS } from '../audio/stems.js';
+
+// cambia el texto solo si es distinto (asignar el mismo texto también invalida la maquetación)
+const setText = (node, s) => { if (node._t !== s) { node._t = s; node.textContent = s; } };
 
 export class DeckUI {
   constructor(app, deck, root) {
@@ -13,6 +16,8 @@ export class DeckUI {
     root.classList.add('deck', 'd' + (deck.idx % 2), 'n' + deck.idx);
     this.build();
     for (const ev of ['state', 'tempo', 'track', 'cues', 'loop', 'pads', 'stems', 'grid']) deck.on(ev, () => this.refresh(ev));
+    // último deck tocado: el zoom independiente de los botones y del teclado se aplica a ese deck
+    root.addEventListener('pointerdown', () => { app.lastDeckTouched = deck.idx; }, true);
     app.on('settings', () => this.refresh('state'));
     app.on('expansions', () => this.refresh('state'));
     app.sampler.on('voices', () => this.refreshPads());
@@ -29,6 +34,9 @@ export class DeckUI {
     this.bpmEl = el('div', { class: 'd-bpm', title: 'Doble clic para editar el BPM' }, el('b', {}, '—'), el('small', {}, 'BPM'));
     this.bpmEl.addEventListener('dblclick', () => this.editBpm());
     this.tempoEl = el('div', { class: 'd-tempo' });
+    // medidor de fase respecto al maestro: punto en el centro = en fase (verde); a los lados, por delante o por detrás
+    this.phaseDot = el('b', { class: 'pm-dot' });
+    this.phaseMeter = el('div', { class: 'phase-meter off', title: 'Fase respecto al deck maestro' }, el('i', { class: 'pm-c' }), this.phaseDot);
     this.elapsed = el('span', { class: 'elapsed' }, '00:00.0');
     this.remain = el('span', { class: 'remain' }, '-00:00.0');
     this.elapsedClock = el('div', { class: 'deck-clock elapsed-clock' }, el('small', {}, 'ELAPSED'), this.elapsed);
@@ -43,7 +51,7 @@ export class DeckUI {
       el('div', { class: 'deck-meta' }, this.title, el('div', { class: 'd-sub' }, this.ytBadge, this.artist)),
       el('div', { class: 'deck-stats' },
         this.keyEl,
-        el('div', { class: 'd-bpmbox' }, this.bpmEl, this.tempoEl)));
+        el('div', { class: 'd-bpmbox' }, this.bpmEl, this.tempoEl, this.phaseMeter)));
 
       this.wavePanel = el('div', { class: 'deck-wave-panel' }, this.elapsedClock, this.detailCanvas = el('canvas', { class: 'wave deck-detail-wave' }), this.remainClock);
       this.overviewPanel = el('div', { class: 'deck-overview-panel' }, this.ovCanvas = el('canvas', { class: 'overview' }));
@@ -62,8 +70,9 @@ export class DeckUI {
     const platCol = el('div', { class: 'platter-col' }, platWrap);
 
     // --- botones de rendimiento
-    this.syncBtn = btn('SYNC', { cls: 'sync', onClick: () => d.toggleSync(), title: 'Sincroniza tempo y fase con el otro deck' });
-    this.masterEl = el('span', { class: 'master-ind' }, 'MASTER');
+    this.syncBtn = btn('SYNC', { cls: 'sync', onClick: () => d.toggleSync(), title: 'Sincroniza el tempo y la fase con el deck maestro (MASTER) y los mantiene' });
+    this.masterEl = btn('MASTER', { cls: 'micro master-ind', onClick: () => app.syncMgr.setMaster(d),
+      title: 'Deck maestro del sync: los decks con SYNC siguen su tempo y su fase. Por defecto es el primero que suena; pulsa para que sea este' });
     this.keylockBtn = btn('KEY LOCK', { cls: 'small', onClick: () => d.toggleKeylock(), title: 'Mantiene la tonalidad al cambiar el tempo' });
     this.slipBtn = btn('SLIP', { cls: 'small', onClick: () => d.toggleSlip() });
     this.vinylBtn = btn('VINYL', { cls: 'small', onClick: () => d.toggleVinyl(), title: 'Plato en modo vinilo (scratch) o nudge' });
@@ -370,7 +379,7 @@ export class DeckUI {
     this.autoBtn.classList.toggle('on', d.loop.on);
     this.reloopBtn.classList.toggle('on', d.loop.on);
     this.semisEl.textContent = (d.semis > 0 ? '+' : '') + d.semis;
-    if (ev === 'tempo' && !d.sync) this.pitchFader.set((d.pitch + 1) / 2, true);
+    if (ev === 'tempo' && (!d.sync || d.isSyncMaster)) this.pitchFader.set((d.pitch + 1) / 2, true);
     this.refreshPads();
   }
 
@@ -413,57 +422,94 @@ export class DeckUI {
     this.stemSepBtn.textContent = queued ? (S.busy ? '⏳ EN COLA / SEPARANDO' : '⏳ EN COLA') : (S.busy && !S.bgRunning ? '⏳ SEPARANDO…' : '✨ SEPARAR');
   }
 
-  // actualización por frame
+  // actualización por frame: solo se toca el DOM si el texto o la clase cambian (cada cambio obliga al
+  // navegador a recalcular estilos y maquetación)
   frame(isMaster) {
     const d = this.deck, t = d.track;
     const time = d.time;
-    this.elapsed.textContent = fmtTime(time);
+    setText(this.elapsed, fmtTime(time));
     if (this.gridEdit && d.hasGridMarkers && (this._gf = (this._gf || 0) + 1) % 6 === 0) this.refreshGrid();
     // vídeo de YouTube cuya duración aún no ha dado el reproductor: «--:--» en vez de un 0 engañoso
-    this.remain.textContent = t && !d.duration ? '--:--.-' : '-' + fmtTime(Math.max(0, d.duration - time));
+    setText(this.remain, t && !d.duration ? '--:--.-' : '-' + fmtTime(Math.max(0, d.duration - time)));
     this.remain.classList.toggle('warn', d.playing && d.duration > 0 && d.duration - time < 30);
     const bpm = d.currentBpm;
-    this.bpmEl.firstChild.textContent = bpm ? bpm.toFixed(1) : '—';
-    const pct = (d.tempo - 1) * 100;
-    this.tempoEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-    this.pitchPct.textContent = this.tempoEl.textContent;
+    setText(this.bpmEl.firstChild, bpm ? bpm.toFixed(1) : '—');
+    const pct = (d.tempo - 1) * 100, pctS = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+    setText(this.tempoEl, pctS);
+    setText(this.pitchPct, pctS);
     const key = d.displayKey;
-    this.keyEl.textContent = key || '—';
-    this.keyEl.style.color = d.semis !== 0 ? '' : keyColor(key);
+    setText(this.keyEl, key || '—');
+    const kc = d.semis !== 0 ? '' : keyColor(key);
+    if (this._kc !== kc) { this._kc = kc; this.keyEl.style.color = kc; }
     this.keyEl.classList.toggle('shifted', d.semis !== 0);
     this.masterEl.classList.toggle('on', isMaster);
     this.cueBtn.classList.toggle('on', !d.playing && !!t && Math.abs(time - d.cuePoint) < 0.03);
     this.playBtn.classList.toggle('on', d.playing);
+    this.syncBtn.classList.toggle('on', d.sync);
     if (d.padMode === 'slicer' || d.padMode === 'roll' || d.padMode === 'sampler') {
       if (!this._padTick || performance.now() - this._padTick > 120) { this._padTick = performance.now(); this.refreshPads(); }
     }
+    this.framePhase();
     this.overview.draw();
     this.waveDetail.draw();
     this.drawPlatter(time);
   }
 
+  // Medidor de fase: ±½ beat a lo ancho; verde = en fase (≤ 10 ms), ámbar = poco desfase, rojo = desfasado.
+  // Oculto si no hay un maestro sonando o si este deck es el maestro.
+  framePhase() {
+    const d = this.deck, info = d.phaseInfo();
+    const off = !info;
+    if (this._pmOff !== off) { this._pmOff = off; this.phaseMeter.classList.toggle('off', off); }
+    if (off) return;
+    const ms = info.ms, abs = Math.abs(ms);
+    const cls = abs <= 10 ? 'ok' : abs <= 30 ? 'warn' : 'bad';
+    const x = Math.round(clamp(info.beat, -0.5, 0.5) * 2 * 30); // ±30 px
+    if (x !== this._pmX) { this._pmX = x; this.phaseDot.style.transform = `translateX(${x}px)`; }
+    if (cls !== this._pmCls) { this._pmCls = cls; this.phaseMeter.dataset.state = cls; }
+    const now = performance.now();
+    if (now - (this._pmT || 0) > 300) {
+      this._pmT = now;
+      const s = abs <= 10 ? `En fase con el Deck ${info.master.idx + 1}` : `${ms > 0 ? 'Por detrás' : 'Por delante'} del Deck ${info.master.idx + 1}: ${Math.round(abs)} ms`;
+      if (this.phaseMeter.title !== s) this.phaseMeter.title = s;
+    }
+  }
 
+  // Plato: el fondo (degradado, surcos, círculo central) se pinta una vez; en cada frame solo lo que se mueve.
+  // Si no se ve (pantallas pequeñas, deck de YouTube) o nada ha cambiado, no se dibuja.
   drawPlatter(time) {
-    const c = this.platter, ctx = c.getContext('2d');
-    const w = c.width, h = c.height, r = w / 2 - 6;
-    ctx.clearRect(0, 0, w, h);
-    const d = this.deck;
+    const c = this.platter, d = this.deck;
+    if (!isShown(c) || d.isYT) return;
     const accent = DECK_COLORS[d.idx];
+    // el tema entra en la clave: al cambiarlo se redibuja (y el fondo se rehace con sus colores)
+    const theme = `${TC['platter-in']}|${TC['platter-out']}|${TC['platter-hub']}|${accent}`;
+    const key = `${Math.round(time * 120)}|${d.currentBpm.toFixed(2)}|${d.tempo}|${d.scratching}|${d.vinyl}|${d.playing}|${d.duration}|${theme}`;
+    if (key === this._platKey) return;
+    this._platKey = key;
+    const ctx = c.getContext('2d');
+    const w = c.width, h = c.height, r = w / 2 - 6;
+    if (!this._platBg || this._platBgTheme !== theme) {
+      const bg = document.createElement('canvas'); bg.width = w; bg.height = h;
+      const b = bg.getContext('2d');
+      b.translate(w / 2, h / 2);
+      const g = b.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
+      g.addColorStop(0, TC['platter-in']); g.addColorStop(1, TC['platter-out']);
+      b.fillStyle = g;
+      b.beginPath(); b.arc(0, 0, r, 0, Math.PI * 2); b.fill();
+      b.strokeStyle = 'rgba(255,255,255,0.035)';
+      for (let rr = r * 0.4; rr < r * 0.95; rr += 7) { b.beginPath(); b.arc(0, 0, rr, 0, Math.PI * 2); b.stroke(); }
+      b.strokeStyle = 'rgba(255,255,255,0.08)'; b.lineWidth = 6;
+      b.beginPath(); b.arc(0, 0, r - 4, 0, Math.PI * 2); b.stroke();
+      this._platBg = bg; this._platBgTheme = theme;
+    }
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(this._platBg, 0, 0);
     ctx.save();
     ctx.translate(w / 2, h / 2);
-    // fondo
-    const g = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
-    g.addColorStop(0, TC['platter-in']); g.addColorStop(1, TC['platter-out']);
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
-    // surcos
-    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
-    for (let rr = r * 0.4; rr < r * 0.95; rr += 7) { ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.stroke(); }
     // progreso
     if (d.duration) {
       const p = clamp(time / d.duration, 0, 1);
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 6;
-      ctx.beginPath(); ctx.arc(0, 0, r - 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 6;
       ctx.strokeStyle = d.duration - time < 30 && d.playing ? '#ffa31a' : accent;
       ctx.beginPath(); ctx.arc(0, 0, r - 4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
     }

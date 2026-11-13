@@ -714,13 +714,22 @@ function registerStemsIpc() {
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
+// Aceleración por GPU (Ajustes → Audio → Rendimiento): composición, canvas 2D y rasterización
+function gpuStatus() {
+  try {
+    const s = app.getGPUFeatureStatus();
+    const on = (v) => /^enabled/.test(String(v || ''));
+    return { compositing: on(s.gpu_compositing), canvas2d: on(s['2d_canvas']), raster: on(s.rasterization) };
+  } catch (_) { return null; }
+}
+
 function registerIpc() {
   registerStemsIpc();
   ipcMain.handle('app:info', () => ({
     os: `${os.type()} ${os.release()} (${os.arch()})`, electron: process.versions.electron,
     isBeta: /beta|alpha|rc/i.test(app.getVersion()), osLabel: OS_LABEL, store: !!process.windowsStore,
     services: { feedback: !!FEEDBACK_URL, stats: !!STATS_URL, search: !!SEARCH_URL }, updates: !!(updater && updater.status().state !== 'disabled'),
-    version: app.getVersion(), name: APP_NAME, platform: process.platform,
+    version: app.getVersion(), name: APP_NAME, platform: process.platform, gpu: gpuStatus(),
     userData: app.getPath('userData'), recordings: recDir()
   }));
 

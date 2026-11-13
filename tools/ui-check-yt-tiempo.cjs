@@ -65,7 +65,10 @@ const SPY = `(() => {
   };
   return true;
 })()`;
-const texts = (sel) => `(() => { window.__texts = new Map(); return new Promise(r => setTimeout(() => {
+// (las ondas solo se redibujan si algo cambia: se marcan para que se vuelvan a pintar y se lean los textos)
+const texts = (sel) => `(() => { window.__texts = new Map();
+  nexuraApp.waves.forEach(w => { w.dirty = true; }); nexuraApp.deckUIs.forEach(u => { u.waveDetail.dirty = true; u.overview.dirty = true; });
+  return new Promise(r => setTimeout(() => {
   const o = {}; for (const [k, v] of window.__texts) o[k] = [...v]; r(o); }, 400)); })()`;
 const clocks = `(() => { const u = nexuraApp.deckUIs[0], d = nexuraApp.decks[0];
   return { elapsed: u.elapsed.textContent, remain: u.remain.textContent, warn: u.remain.classList.contains('warn'), time: d.time, duration: d.duration, playing: d.playing }; })()`;

@@ -3,6 +3,7 @@ import { Emitter, el, $, toast, debounce, fmtTime, clamp } from './util.js';
 import { platform, isDesktop } from './platform.js';
 import { AudioEngine } from './audio/engine.js';
 import { Deck } from './audio/deck.js';
+import { SyncManager, SYNC_TICK_MS } from './audio/sync.js';
 import { FxUnit, EFFECTS, BEAT_VALUES } from './audio/fx.js';
 import { Sampler } from './audio/sampler.js';
 import { ExpansionManager } from './audio/expansions.js';
@@ -45,7 +46,7 @@ const DEFAULTS = {
   outputMode: 'auto', masterDevice: '', cueDevice: '', latency: 'normal',
   pitchRange: 0.08, keylockDefault: false, quantize: true, cueLoops: true, aiAutoCues: true, aiEnergyMode: 'keep', automixBars: 16, autoplay: { ...AUTOPLAY_DEFAULTS }, ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: '', syncPhase: true, autoGain: true,
   minBpm: 85, maxBpm: 175, motorStart: 4, motorStop: 4, jogSensitivity: 1,
-  invertPitch: false, mc4000PhonesMidi: false, midiProfiles: {}, xfCurve: 'smooth', waveZoom: 6,
+  invertPitch: false, mc4000PhonesMidi: false, midiProfiles: {}, xfCurve: 'smooth', waveZoom: 6, waveZoomLink: true, waveZoomDecks: null, perfMode: false,
   historyAfter: 30, loadOnPlaying: 'play', slipRelease: 0, stemSlipMode: 'mute', stemSlipBeats: 1,
   protectLibrary: false, libCols: null, libColsSame: true, libColsByView: {}, libArtSize: 'small', crateSort: 'custom', crateSubTracks: true, libRail: 'auto', libHistOpen: false, folderToCrates: true, crateCollapsed: [], deckLayout: 'auto', stemsDir: '', stemsModel: 'htdemucs', stemsAuto: true, stemsBackground: true, autoAnalyze: true,
   expansions: { flip: false, fxPresets: false, laptop: false, video: false, dvs: false, pitchTime: false },
@@ -106,6 +107,7 @@ class App extends Emitter {
     this.fxUnits = [new FxUnit(this.engine.ctx, 0), new FxUnit(this.engine.ctx, 1)];
     (this.settings.fx || []).forEach((j, i) => this.fxUnits[i] && this.fxUnits[i].fromJSON(j));
     // Siempre 4 decks de audio; los 3 y 4 solo se muestran con una controladora de 4 decks
+    this.syncMgr = new SyncManager(this);
     this.decks = [0, 1, 2, 3].map(i => new Deck(this, i));
     this.deckCount = 2;
     this.layers = [0, 1]; // deck visible en el lado izquierdo (1 o 3) y derecho (2 o 4)
@@ -146,7 +148,8 @@ class App extends Emitter {
     this.updatesUI = new UpdatesUI(this);
     this.statsTimer = setTimeout(() => this.sendStatsSoon(), 20000);
     requestAnimationFrame(() => this.frame());
-    setInterval(() => this.decks.forEach(d => d.syncTick()), 250);
+    // sync: maestro y corrección continua de tempo y fase (independiente del dibujo)
+    setInterval(() => { try { this.syncMgr.tick(); } catch (e) { console.error('sync', e); } }, SYNC_TICK_MS);
     setInterval(() => this.automix.tick().catch(e => console.error('automix', e)), 100);
     setInterval(() => { try { this.autoplay.tick(); } catch (e) { console.error('autoplay', e); } }, 100);
     this.updateStatus();
@@ -180,6 +183,8 @@ class App extends Emitter {
     if (k === 'motorStart' || k === 'motorStop') this.decks.forEach(d => d.applyMotor());
     if (k === 'slipRelease') this.decks.forEach(d => d.applySlipRelease());
     if (k === 'protectLibrary' && this.library) this.library.protected = !!v;
+    if (k === 'perfMode') document.body.classList.toggle('perf-mode', !!v);
+    if (k === 'waveZoomLink' && this.waves) this.applyWaveZoom();
     if (k === 'crateSubTracks' && this.library) { this.library.subTracks = v !== false; if (this.libraryUI) { this.libraryUI.renderSide(); this.libraryUI.refresh(); } }
     this.saveSettingsSoon();
     this.emit('settings', k, v);
@@ -206,6 +211,7 @@ class App extends Emitter {
   // ------------------------------------------------------------------ UI
   buildUI() {
     const app = $('#app');
+    document.body.classList.toggle('perf-mode', !!this.settings.perfMode);
     this.waveLayout = this.settings.waveLayout === 'deck' ? 'deck' : 'serato';
     this.waveLayoutToggle = $('#wave-layout-toggle');
     this.waveLayoutToggle?.querySelectorAll('[data-wave-layout]').forEach((button) => {
@@ -252,8 +258,9 @@ class App extends Emitter {
     $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
       this.helpBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
     $('#wave-zoom').append(
-      btn('−', { cls: 'micro', title: 'Alejar', onClick: () => this.waves.forEach(w => { w.zoom = Math.min(40, w.zoom * 1.25); }) }),
-      btn('+', { cls: 'micro', title: 'Acercar', onClick: () => this.waves.forEach(w => { w.zoom = Math.max(1.5, w.zoom / 1.25); }) }));
+      btn('−', { cls: 'micro', title: 'Alejar la forma de onda (tecla −)', onClick: () => this.zoomWaves(1.25) }),
+      btn('+', { cls: 'micro', title: 'Acercar la forma de onda (tecla +)', onClick: () => this.zoomWaves(1 / 1.25) }));
+    this.applyWaveZoom();
     this.applyPanels();
     this.midiStatus.addEventListener('click', () => this.settingsUI.open('midi'));
     this.outStatus.addEventListener('click', () => this.settingsUI.open('audio'));
@@ -292,6 +299,31 @@ class App extends Emitter {
     if (persist) this.setSetting('waveLayout', mode);
     // Canvas debe tomar las nuevas dimensiones del modo activo.
     requestAnimationFrame(() => this.waves?.forEach((wave) => wave.draw()));
+  }
+
+  // ------------------------------------------------------------------ zoom de la forma de onda
+  // Formas de onda de un deck: la de arriba (SUPERIOR) y la del propio deck (EN DECK) van siempre juntas
+  deckWaves(i) { return [this.waves?.[i], this.deckUIs?.[i]?.waveDetail].filter(Boolean); }
+  get waveZoomLinked() { return this.settings.waveZoomLink !== false; }
+  // Zoom guardado: `waveZoom` (todos los decks) o `waveZoomDecks[i]` (independiente por deck)
+  waveZoomOf(i) {
+    const z = this.waveZoomLinked ? this.settings.waveZoom : (this.settings.waveZoomDecks || [])[i] ?? this.settings.waveZoom;
+    return clamp(Number(z) || 6, 1.5, 40);
+  }
+  applyWaveZoom() { this.decks.forEach((_, i) => this.deckWaves(i).forEach(w => w.setZoom(this.waveZoomOf(i)))); }
+  // factor > 1 = alejar. Enlazado (por defecto): cambia a la vez en todos los decks; independiente: solo en
+  // el deck indicado (rueda sobre su onda) o, con los botones y el teclado, en el último deck tocado
+  zoomWaves(factor, deckIdx = null) {
+    if (this.waveZoomLinked) {
+      this.settings.waveZoom = clamp(this.waveZoomOf(deckIdx ?? 0) * factor, 1.5, 40);
+    } else {
+      const i = deckIdx ?? this.lastDeckTouched ?? 0;
+      const zs = (this.settings.waveZoomDecks || []).slice();
+      zs[i] = clamp(this.waveZoomOf(i) * factor, 1.5, 40);
+      this.settings.waveZoomDecks = zs;
+    }
+    this.applyWaveZoom();
+    this.saveSettingsSoon();
   }
 
   showStartOverlay() {
@@ -335,8 +367,18 @@ class App extends Emitter {
   }
 
   // ------------------------------------------------------------------ bucle principal
-  frame() {
-    requestAnimationFrame(() => this.frame());
+  // Se dibuja como mucho a 60 fps (30 en «Modo rendimiento»), también con pantallas de 120-240 Hz: antes la
+  // app redibujaba todo en cada refresco de la pantalla (240 veces por segundo en un monitor de 240 Hz)
+  // Entre frames se duerme con un temporizador (en vez de despertar en cada refresco solo para descartarlo)
+  frame(ts = performance.now()) {
+    const next = () => requestAnimationFrame((t) => this.frame(t));
+    const iv = 1000 / (this.settings.perfMode ? 30 : 60);
+    if (ts - (this._lastRender || 0) < iv - 3) { next(); return; }
+    this._lastRender = ts;
+    this.render();
+    if (iv - 7 > 4) setTimeout(next, iv - 7); else next();
+  }
+  render() {
     try {
       const master = this.masterDeck();
       this.decks.forEach((d, i) => { d.frame(); if (this.isDeckVisible(i)) this.deckUIs[i].frame(d === master); if (i < this.deckCount) this.waves[i].draw(); });
@@ -345,12 +387,16 @@ class App extends Emitter {
       if (this.midi) this.midi.frame();
       // BPM para los efectos
       for (const u of this.fxUnits) { const d = this.fxTargetDeck(u); u.setBpm(d && d.currentBpm ? d.currentBpm : (master && master.currentBpm) || 120); }
-      const now = new Date();
-      this.clock.textContent = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+      const now = Date.now();
+      if (now - (this._clockAt || 0) > 1000) {
+        this._clockAt = now;
+        const s = new Date(now).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        if (this.clock.textContent !== s) this.clock.textContent = s;
+      }
       const amLabel = this.automix.enabled && this.automix.status().startsWith('AUTOMIX ·') ? '✨ ' + this.automix.status().replace('AUTOMIX · ', '') : '✨ AUTOMIX';
       if (this.automixBtn.textContent !== amLabel) this.automixBtn.textContent = amLabel;
       this.autoplayUI.frame();
-      if (this.engine.recording) this.recTime.textContent = fmtTime((performance.now() - this.engine.recStart) / 1000, false);
+      if (this.engine.recording) { const s = fmtTime((performance.now() - this.engine.recStart) / 1000, false); if (this.recTime.textContent !== s) this.recTime.textContent = s; }
     } catch (e) { console.error(e); }
   }
 
@@ -402,9 +448,9 @@ class App extends Emitter {
     this.emit('layers', this.layers);
   }
 
+  // Deck maestro (indicador MASTER y BPM de los efectos): el del sync o, si no hay, el primero que suena
   masterDeck() {
-    const syncFollowers = this.decks.filter(d => d.sync && d.playing);
-    for (const f of syncFollowers) { const m = f.syncMaster; if (m) return m; }
+    if (this.syncMgr.current) return this.syncMgr.current;
     const playing = this.decks.filter(d => d.playing && d.track);
     return playing.sort((a, b) => a.playStartedAt - b.playStartedAt)[0] || null;
   }
@@ -1127,6 +1173,9 @@ class App extends Emitter {
         case 'F6': this.engine.setSplit(!this.engine.split); break;
         case 'F8': this.toggleLaptopMode(); break;
         case 'F7': if (e.shiftKey) this.autoplay.toggle(); else this.automix.toggle(); break;
+        // zoom de la forma de onda (en todos los decks o en el del último deck tocado, según Ajustes)
+        case 'Equal': case 'NumpadAdd': this.zoomWaves(1 / 1.25); break;
+        case 'Minus': case 'NumpadSubtract': this.zoomWaves(1.25); break;
         default: held.delete(e.code); return;
       }
       e.preventDefault();

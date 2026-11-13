@@ -762,24 +762,42 @@ class Slot {
     this.enabled = false;
     this.param = 0.5;
     this.fx = null; this.fxId = null;
+    this.attached = false;
+  }
+  // El efecto solo está conectado mientras está encendido (y 0,6 s después, cuando ya no se oye): antes las
+  // 6 ranuras (reverb de convolución, ecos, flanger, bitcrusher…) procesaban el audio de los decks siempre,
+  // también apagadas, y eso era buena parte de la CPU del motor de audio
+  attach() {
+    clearTimeout(this._off);
+    if (this.attached || !this.fx) return;
+    this.input.connect(this.fx.input);
+    this.fx.output.connect(this.wet);
+    this.attached = true;
+  }
+  detach() {
+    clearTimeout(this._off);
+    if (!this.attached || !this.fx) { this.attached = false; return; }
+    try { this.input.disconnect(this.fx.input); } catch (_) { /* ya desconectado */ }
+    try { this.fx.output.disconnect(this.wet); } catch (_) { /* ya desconectado */ }
+    this.attached = false;
   }
   setEffect(id) {
-    if (this.fx) { try { this.input.disconnect(this.fx.input); this.fx.output.disconnect(); } catch (_) {} }
+    this.detach();
     const def = EFFECTS.find(e => e.id === id) || EFFECTS[0];
     this.fxId = def.id; this.name = def.name;
     this.fx = def.make(this.ctx);
     this.fx.setParam(this.param);
     this.fx.setTiming(this.unit.beatSec, this.unit.beats);
-    this.input.connect(this.fx.input);
-    this.fx.output.connect(this.wet);
-    if (this.enabled) this.fx.on(true);
+    if (this.enabled) { this.attach(); this.fx.on(true); }
   }
   setEnabled(v) {
     this.enabled = !!v;
     const t = this.ctx.currentTime;
+    if (this.enabled) this.attach();
     this.bypass.gain.setTargetAtTime(v ? 0 : 1, t, 0.01);
     this.wet.gain.setTargetAtTime(v ? 1 : 0, t, 0.01);
     if (this.fx) this.fx.on(this.enabled);
+    if (!this.enabled) { clearTimeout(this._off); this._off = setTimeout(() => { if (!this.enabled) this.detach(); }, 600); }
   }
   setParam(v) { this.param = clamp(v, 0, 1); if (this.fx) this.fx.setParam(this.param); }
 }

@@ -116,8 +116,15 @@ async function run(win) {
   await js(win, `document.querySelector('.toast.upd-notes .toast-act').click(); true`);
   await wait(600);
   let s = await js(win, `(() => { const m = [...document.querySelectorAll('.modal')].pop(); return m ? { title: m.querySelector('.modal-title, h2, header')?.textContent || '', text: m.textContent, h3: m.querySelectorAll('.notes h3').length, li: m.querySelectorAll('.notes li').length } : null; })()`);
-  check('«Ver novedades» abre las notas de la versión en lenguaje sencillo', s && s.text.includes(pkg.version) && s.h3 >= 3 && s.li >= 8 && /Comprobar clave/.test(s.text) && /30 búsquedas/.test(s.text), s && { title: s.title, h3: s.h3, li: s.li });
+  check('«Ver novedades» abre las notas de la versión actual (' + pkg.version + ')', s && s.text.includes(pkg.version) && s.h3 >= 1 && s.li >= 1, s && { title: s.title, h3: s.h3, li: s.li });
   await shot(win, '02-novedades-1280');
+  // el contenido de la rc.2 se comprueba en su propia sección, buscada por su versión (no la primera del archivo)
+  await js(win, `nexuraApp.closeModal(); nexuraApp.notes.show('1.0.0-rc.2'); true`);
+  await wait(600);
+  s = await js(win, `(() => { const m = [...document.querySelectorAll('.modal')].pop(); return m ? { title: m.querySelector('.modal-title, h2, header')?.textContent || '', text: m.textContent, h3: m.querySelectorAll('.notes h3').length, li: m.querySelectorAll('.notes li').length } : null; })()`);
+  check('Las notas de la 1.0.0-rc.2 (por su versión) en lenguaje sencillo', s && s.text.includes('1.0.0-rc.2') && s.h3 >= 3 && s.li >= 8 && /Comprobar clave/.test(s.text) && /30 búsquedas/.test(s.text), s && { title: s.title, h3: s.h3, li: s.li });
+  await js(win, `nexuraApp.closeModal(); nexuraApp.notes.show(); true`);
+  await wait(600);
   win.setContentSize(900, 640); // ancho mínimo de la ventana (375 px: tools/ui-check-rc2.cjs en modo navegador)
   await wait(500);
   s = await js(win, `(() => { const m = [...document.querySelectorAll('.modal')].pop(); const r = m.getBoundingClientRect(); return { left: r.left, right: r.right, vw: innerWidth, sw: document.documentElement.scrollWidth }; })()`);

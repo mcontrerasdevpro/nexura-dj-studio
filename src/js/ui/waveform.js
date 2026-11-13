@@ -94,15 +94,64 @@ function drawYouTube(ctx, w, h, d, detail) {
 }
 function fmtShort(s) { s = Math.max(0, s || 0); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; }
 
+// Tamaño de cada lienzo observado con ResizeObserver: leer clientWidth/clientHeight en cada frame, después
+// de cambiar textos del deck, obligaba al navegador a recalcular la maquetación entera en cada frame
+const sizes = new WeakMap();
+const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((entries) => {
+  for (const e of entries) { const b = e.contentRect; sizes.set(e.target, { w: Math.round(b.width), h: Math.round(b.height) }); }
+}) : null;
+function canvasSize(c) {
+  let s = sizes.get(c);
+  if (!s) { s = { w: c.clientWidth, h: c.clientHeight }; sizes.set(c, s); if (ro) ro.observe(c); }
+  return s;
+}
+// el lienzo a la resolución de la pantalla (CSS px × devicePixelRatio), nunca más
 function fitCanvas(c) {
   const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth, h = c.clientHeight;
+  const { w, h } = canvasSize(c);
   if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
   }
   const ctx = c.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, w, h };
+  return { ctx, w, h, dpr };
+}
+const visible = (c) => { if (!c.isConnected) return false; const s = canvasSize(c); return s.w > 0 && s.h > 0; };
+// ¿se ve el elemento? (tamaño observado, sin leer la maquetación en cada frame)
+export const isShown = visible;
+
+// Forma de onda pre-dibujada por mosaicos de TILE px (CSS) para una escala (px/s), alto y color dados: al
+// reproducir solo se copian 2-4 mosaicos por frame en vez de calcular y pintar cada columna
+const TILE = 512;
+class WaveTiles {
+  constructor() { this.key = ''; this.tiles = new Map(); }
+  get(wave, i, pxPerSec, h, dpr, solid) {
+    const key = `${pxPerSec}|${h}|${dpr}|${solid || ''}`;
+    if (key !== this.key || wave !== this.wave) { this.key = key; this.wave = wave; this.tiles.clear(); }
+    let c = this.tiles.get(i);
+    if (c) { this.tiles.delete(i); this.tiles.set(i, c); return c; } // el más reciente, al final
+    c = document.createElement('canvas');
+    c.width = Math.ceil(TILE * dpr); c.height = Math.max(1, Math.round(h * dpr));
+    const ctx = c.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const data = wave.data, colors = wave.colors, rate = wave.rate, nb = data.length / 4;
+    const binsPerPx = rate / pxPerSec, mid = h / 2;
+    let last = null;
+    for (let x = 0; x < TILE; x++) {
+      const tb = ((i * TILE + x) / pxPerSec) * rate;
+      if (tb < 0 || tb >= nb) continue;
+      let bi = Math.floor(tb), best = bi, bv = data[bi * 4];
+      const end = Math.min(nb, Math.floor(tb + binsPerPx));
+      for (let k = bi + 1; k < end; k++) { const v = data[k * 4]; if (v > bv) { bv = v; best = k; } }
+      const amp = (bv / 255) * (mid - 2);
+      const col = solid || colors[best];
+      if (col !== last) { ctx.fillStyle = col; last = col; }
+      ctx.fillRect(x, mid - amp, 1, amp * 2);
+    }
+    this.tiles.set(i, c);
+    while (this.tiles.size > 12) this.tiles.delete(this.tiles.keys().next().value);
+    return c;
+  }
 }
 
 export class WaveDetail {
@@ -111,9 +160,14 @@ export class WaveDetail {
     this.isGlobal = canvas.classList.contains('wave');
     this.zoom = app.settings.waveZoom || 6; // segundos visibles
     this.wave = null;
+    this.tiles = new WaveTiles();
+    this.dirty = true; this.lastKey = '';
+    // cualquier cambio del deck que se dibuja obliga a redibujar aunque esté parado
+    for (const ev of ['track', 'cues', 'loop', 'grid', 'state', 'tempo', 'seek', 'duration']) deck.on(ev, () => { this.dirty = true; });
     this.bind();
   }
-  setWave(w) { this.wave = w; if (w) colorize(w); }
+  setWave(w) { this.wave = w; if (w) colorize(w); this.dirty = true; }
+  setZoom(z) { const v = clamp(z, 1.5, 40); if (v !== this.zoom) { this.zoom = v; this.dirty = true; } }
   bind() {
     // Arrastrar la forma de onda = scratch / búsqueda
     let lastX = 0, dragging = false;
@@ -151,14 +205,20 @@ export class WaveDetail {
     this.c.addEventListener('pointercancel', up);
     this.c.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.zoom = clamp(this.zoom * (e.deltaY > 0 ? 1.15 : 1 / 1.15), 1.5, 40);
-      this.app.settings.waveZoom = this.zoom;
+      this.app.zoomWaves(e.deltaY > 0 ? 1.15 : 1 / 1.15, this.deck.idx);
     }, { passive: false });
   }
   draw() {
-    if (!this.c.isConnected || !this.c.clientWidth || !this.c.clientHeight) return;
-    const { ctx, w, h } = fitCanvas(this.c);
+    if (!visible(this.c)) return;
     const d = this.deck;
+    const { w, h } = canvasSize(this.c), dpr = window.devicePixelRatio || 1;
+    const t = d.time;
+    // sin cambios desde el último frame (deck parado, nada tocado): no se redibuja; el tema entra en la clave
+    const blink = d.duration - t < 30 && d.playing ? Math.floor(performance.now() / 400) % 2 : 0;
+    const key = `${w}|${h}|${dpr}|${this.zoom}|${Math.round(t * (w / this.zoom) * dpr)}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
+    if (!this.dirty && key === this.lastKey) return;
+    this.dirty = false; this.lastKey = key;
+    const { ctx } = fitCanvas(this.c);
     ctx.fillStyle = TC['wave-bg'];
     ctx.fillRect(0, 0, w, h);
     const mid = h / 2;
@@ -168,42 +228,33 @@ export class WaveDetail {
       return;
     }
     if (d.isYT) return drawYouTube(ctx, w, h, d, true);
-    const t = d.time;
     const pxPerSec = w / this.zoom;
     const t0 = t - (w / 2) / pxPerSec;
     const xOf = (tt) => (tt - t0) * pxPerSec;
+
+    // forma de onda: mosaicos pre-dibujados (en la vista superior cada deck con su color identificativo;
+    // en la vista «en deck», la coloración espectral real low/mid/high); lo ya reproducido, atenuado
+    const wave = this.wave;
+    if (wave) {
+      const solid = this.isGlobal && this.app.waveLayout === 'serato' ? DECK_COLORS[d.idx] : null;
+      const X0 = t0 * pxPerSec;
+      for (let i = Math.floor(X0 / TILE); i * TILE < X0 + w; i++) {
+        if (i < 0) continue;
+        const tile = this.tiles.get(wave, i, pxPerSec, h, dpr, solid);
+        ctx.drawImage(tile, Math.round((i * TILE - X0) * dpr) / dpr, 0, TILE, h);
+      }
+      ctx.fillStyle = TC['wave-bg']; ctx.globalAlpha = 0.45;
+      ctx.fillRect(0, 0, Math.floor(w / 2), h);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = TC['wave-text']; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Analizando…', w / 2, mid + 4);
+    }
 
     // región de loop
     if (d.loop.e > d.loop.s) {
       ctx.fillStyle = d.loop.on ? 'rgba(76,195,107,0.15)' : 'rgba(140,140,150,0.08)';
       ctx.fillRect(xOf(d.loop.s), 0, (d.loop.e - d.loop.s) * pxPerSec, h);
-    }
-
-    // forma de onda
-    const wave = this.wave;
-    if (wave) {
-      const data = wave.data, colors = wave.colors, rate = wave.rate, nb = data.length / 4;
-      const binsPerPx = rate / pxPerSec;
-      for (let x = 0; x < w; x++) {
-        const tb = (t0 + x / pxPerSec) * rate;
-        if (tb < 0 || tb >= nb) continue;
-        let bi = Math.floor(tb), best = bi, bv = data[bi * 4];
-        const end = Math.min(nb, Math.floor(tb + binsPerPx));
-        for (let k = bi + 1; k < end; k++) { const v = data[k * 4]; if (v > bv) { bv = v; best = k; } }
-        const amp = (bv / 255) * (mid - 2);
-        // En la vista superior cada deck conserva su color identificativo;
-        // la vista «en deck» mantiene la coloración espectral real (low/mid/high).
-        const seratoColor = this.isGlobal && this.app.waveLayout === 'serato'
-          ? DECK_COLORS[d.idx]
-          : null;
-        ctx.fillStyle = seratoColor || colors[best];
-        if (x < w / 2) ctx.globalAlpha = 0.55;
-        ctx.fillRect(x, mid - amp, 1, amp * 2);
-        ctx.globalAlpha = 1;
-      }
-    } else {
-      ctx.fillStyle = TC['wave-text']; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('Analizando…', w / 2, mid + 4);
     }
 
     // beatgrid
@@ -311,6 +362,8 @@ export class WaveDetail {
 export class WaveOverview {
   constructor(canvas, deck) {
     this.c = canvas; this.deck = deck; this.wave = null; this.cache = null;
+    this.dirty = true; this.lastKey = '';
+    for (const ev of ['track', 'cues', 'loop', 'grid', 'state', 'seek', 'duration']) deck.on(ev, () => { this.dirty = true; });
     canvas.addEventListener('pointerdown', (e) => this.seekFrom(e));
     canvas.addEventListener('pointermove', (e) => { if (e.buttons & 1) this.seekFrom(e); });
   }
@@ -326,11 +379,11 @@ export class WaveOverview {
     }
     d.seek(clamp((e.clientX - r.left) / r.width, 0, 1) * d.duration);
   }
-  setWave(w) { this.wave = w; this.cache = null; if (w) colorize(w); }
+  setWave(w) { this.wave = w; this.cache = null; this.dirty = true; if (w) colorize(w); }
   render(w, h) {
     const off = document.createElement('canvas');
     const dpr = window.devicePixelRatio || 1;
-    off.width = w * dpr; off.height = h * dpr;
+    off.width = Math.round(w * dpr); off.height = Math.round(h * dpr);
     const ctx = off.getContext('2d');
     ctx.scale(dpr, dpr);
     const wave = this.wave, data = wave.data, nb = data.length / 4;
@@ -345,18 +398,24 @@ export class WaveOverview {
       ctx.fillStyle = wave.colors[Math.min(best, nb - 1)] || '#555';
       ctx.fillRect(x, mid - amp, 1, amp * 2);
     }
-    this.cache = { canvas: off, w, h };
+    this.cache = { canvas: off, w, h, dpr };
   }
   draw() {
-    if (!this.c.isConnected || !this.c.clientWidth || !this.c.clientHeight) return;
-    const { ctx, w, h } = fitCanvas(this.c);
+    if (!visible(this.c)) return;
     const d = this.deck;
+    const { w, h } = canvasSize(this.c), dpr = window.devicePixelRatio || 1;
+    // el cursor se mueve menos de un píxel en casi todos los frames: solo se redibuja si cambia algo
+    const blink = d.duration - d.time < 30 && d.playing ? Math.floor(performance.now() / 400) % 2 : 0;
+    const key = `${w}|${h}|${dpr}|${d.duration ? Math.round(d.time / d.duration * w * dpr) : 0}|${blink}|${this.wave ? 1 : 0}|${TC['overview-bg']}`;
+    if (!this.dirty && key === this.lastKey) return;
+    this.dirty = false; this.lastKey = key;
+    const { ctx } = fitCanvas(this.c);
     ctx.fillStyle = TC['overview-bg'];
     ctx.fillRect(0, 0, w, h);
     if (d.track && d.isYT) return drawYouTube(ctx, w, h, d, false);
     if (!d.track || !d.duration) return;
     if (this.wave) {
-      if (!this.cache || this.cache.w !== w || this.cache.h !== h) this.render(w, h);
+      if (!this.cache || this.cache.w !== w || this.cache.h !== h || this.cache.dpr !== dpr) this.render(w, h);
       ctx.drawImage(this.cache.canvas, 0, 0, w, h);
     } else {
       ctx.fillStyle = TC['overview-empty'];

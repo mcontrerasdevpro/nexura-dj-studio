@@ -9,6 +9,24 @@
 - Los colores de los hot cues y del sampler ya no incluyen azul, para no confundirlos con el Deck 1 (los cues que ya tenías conservan su color).
 - Textos más legibles: todos los textos de Grafito y Carbón tienen buen contraste sobre su fondo.
 
+### SYNC fiable
+- **SYNC** iguala el BPM y alinea los beats al pulsarlo, y los mantiene alineados todo el tiempo: en 5 minutos de mezcla la diferencia ya no pasa de un par de milésimas (antes podía irse a 40-80 ms tras tocar el plato o con el otro deck parado).
+- Nuevo botón **MASTER** en cada deck para elegir el deck maestro; por defecto lo es el primero que suena. Si cambias el tempo del maestro, los decks con SYNC lo siguen.
+- **Medidor de fase** junto al BPM: punto verde en el centro cuando los beats van a la par; a un lado, si van por delante o por detrás.
+- Mover el pitch de un deck con SYNC cambia el tempo de los dos a la vez, sin desfasarlos.
+- Funciona con beatgrids de tempo variable, con BPM muy distintos (×2 / ½), con un deck parado y al cargar otra pista con SYNC activo.
+- Con **KEY LOCK** (también en Automix y Autoplay) los golpes se oyen mucho más juntos: antes se separaban hasta 55 ms; ahora, unos 10 como mucho.
+- En los vídeos de YouTube SYNC no se activa y se explica por qué (su reproductor no permite ajustar el tempo con precisión).
+
+### Zoom de la forma de onda en los dos decks a la vez
+- Los botones **+ / −**, la rueda del ratón y las teclas **+ / −** cambian el zoom de todos los decks a la vez, arriba y en el deck.
+- Si lo prefieres por separado: Ajustes → Reproducción → «Zoom de la forma de onda» → «Independiente por deck». Se recuerda al cerrar.
+
+### Más ligero
+- La interfaz usa unas tres veces menos CPU con dos decks sonando y la tarjeta gráfica trabaja cinco veces menos: se dibuja como mucho a 60 fps aunque tu pantalla sea de 144 o 240 Hz, la forma de onda se pinta por trozos ya preparados y solo se redibuja lo que cambia.
+- Los efectos apagados ya no gastan CPU, y los decks vacíos tampoco.
+- Nuevo **Modo rendimiento** (Ajustes → Audio): menos animaciones, sin brillos y forma de onda a 30 fps, para portátiles o equipos justos. En el mismo sitio verás si la aceleración por GPU está activa. Funciona con los tres temas.
+
 ## 1.0.0-rc.3 · noviembre de 2026
 
 ### Y además

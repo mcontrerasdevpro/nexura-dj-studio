@@ -137,6 +137,8 @@ export class SettingsUI {
     const app = this.app, s = app.settings;
     const outs = await app.engine.listOutputs();
     const opts = { '': 'Predeterminado del sistema', ...Object.fromEntries(outs.filter(o => o.id !== 'default' && o.id !== 'communications').map(o => [o.id, o.label])) };
+    const gpu = app.info && app.info.gpu, gpuOn = !!(gpu && gpu.compositing && gpu.canvas2d);
+    const gpuText = !gpu ? 'Solo se puede comprobar en la app de escritorio' : gpuOn ? 'Activa' : `Desactivada (composición: ${gpu.compositing ? 'sí' : 'no'} · canvas: ${gpu.canvas2d ? 'sí' : 'no'})`;
     p.append(...[
       el('h3', {}, 'Salida de audio'),
       el('p', { class: 'hint' }, 'Conecta tu controladora o interfaz de audio por USB y selecciónala como dispositivo master. Si tiene 4 canales, en modo automático el master sale por 1/2 y los auriculares por 3/4.'),
@@ -147,6 +149,10 @@ export class SettingsUI {
       this.row(s.outputMode === 'external' ? 'Segundo dispositivo (Deck 2)' : 'Dispositivo de auriculares', select(opts, s.cueDevice, (v) => { app.setSetting('cueDevice', v); app.applyOutputs(); }), s.outputMode === 'external' ? 'Solo si no usas una interfaz de 4 salidas' : 'Solo para el modo «dispositivos separados»'),
       this.row('Latencia', select({ low: 'Baja (5 ms)', normal: 'Normal', safe: 'Segura' }, s.latency, (v) => { app.setSetting('latency', v); toast('Reinicia la aplicación para aplicar la latencia', 'info'); })),
       el('p', { class: 'hint' }, `Modo actual: ${app.outputDesc || '—'} · Canales del dispositivo: ${app.engine.ctx.destination.maxChannelCount} · Frecuencia: ${app.engine.ctx.sampleRate} Hz · Latencia: ${Math.round((app.engine.ctx.baseLatency + (app.engine.ctx.outputLatency || 0)) * 1000)} ms`),
+      el('h3', {}, 'Rendimiento'),
+      this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
+      this.row('Aceleración por GPU', el('span', { id: 'set-gpu', class: 'gpu-state' + (gpuOn ? ' ok' : '') }, gpuText),
+        gpuOn ? 'La interfaz y las formas de onda se dibujan con la tarjeta gráfica' : 'Sin aceleración, la interfaz usa más CPU. Actualiza el controlador de la tarjeta gráfica'),
       el('h3', {}, 'Grabación'),
       el('p', { class: 'hint' }, `Las grabaciones (WAV) se guardan en: ${app.info.recordings}`),
       btn('Probar salida (tono 1 s)', { cls: 'small', onClick: () => this.testTone() })].filter(Boolean));
@@ -226,7 +232,9 @@ export class SettingsUI {
       this.row('Retorno del slip (ms)', this.number('slipRelease', 0, 1000, 10), 'Al soltar el slip (scratch, roll, censor o loop), fundido hasta la posición en la que iría la pista. 0 = salto inmediato'),
       this.row('Stem Slip', select({ mute: 'Silenciar el stem mientras se mantiene', loop: 'Repetir el stem en loop mientras se mantiene' }, s.stemSlipMode || 'mute', (v) => app.setSetting('stemSlipMode', v)), 'Modo de pads Stems con SLIP activado (o acciones MIDI «Stem Slip»): al soltar, el stem vuelve en su sitio'),
       this.row('Beats del loop de Stem Slip', select({ 0.25: '1/4', 0.5: '1/2', 1: '1', 2: '2' }, String(s.stemSlipBeats || 1), (v) => app.setSetting('stemSlipBeats', Number(v)))),
-      this.row('Sync con alineación de fase', this.toggle('syncPhase')),
+      this.row('Sync con alineación de fase', this.toggle('syncPhase'), 'Al pulsar SYNC, además del BPM se alinean los beats con los del deck maestro (MASTER) y se mantienen alineados'),
+      this.row('Zoom de la forma de onda', Object.assign(select({ linked: 'Igual en todos los decks (recomendado)', deck: 'Independiente por deck' }, s.waveZoomLink === false ? 'deck' : 'linked', (v) => app.setSetting('waveZoomLink', v === 'linked')), { id: 'set-wave-zoom' }),
+        'Con +/− junto a la onda, la rueda del ratón sobre ella o las teclas + y −. Independiente: la rueda cambia la onda que tocas; los botones y el teclado, la del último deck que has tocado'),
       this.row('Auto-gain al cargar', this.toggle('autoGain'), 'Iguala el volumen según el análisis'),
       this.row('Al cargar sobre un deck que está sonando', select({ play: 'Sustituir y seguir sonando', pause: 'Sustituir y dejar en pausa', block: 'No permitir (proteger en directo)' }, s.loadOnPlaying || 'play', (v) => app.setSetting('loadOnPlaying', v)), 'Para directo puedes protegerlo y evitar cambiar por error la pista que suena'),
       this.row('Arranque del motor (ms)', this.number('motorStart', 2, 3000, 10), 'Tiempo hasta velocidad completa al pulsar play'),
@@ -562,6 +570,7 @@ export class SettingsUI {
       ['Deck 2: Cue / Play / Sync / Loop', 'N / M / , / .'], ['Deck 2: pitch bend − / +', 'K / L'], ['Deck 2: pads 1-8', 'Q W E R T Y U I (Mayús = borrar)'],
       ['Navegar biblioteca', '↑ / ↓ / RePág / AvPág'], ['Barra lateral: recorrer / abrir / plegar y desplegar', '↑ ↓ / Intro / ← →'],
       ['Quitar de la crate / de Prepare (en «Todas las pistas»: eliminar de la biblioteca)', 'Supr'], ['Eliminar de la biblioteca al instante, sin preguntar (pistas seleccionadas, desde cualquier vista; los archivos no se borran)', 'Ctrl + Supr'], ['Eliminar la lista de YouTube con el foco en la barra lateral (en «YouTube · todos los vídeos»: quitar todos los vídeos; pide confirmación)', 'Supr'], ['Deshacer lo último quitado o eliminado', 'Ctrl + Z'], ['Cargar en deck 1 / 2', 'Mayús + ← / Mayús + →'], ['Cambiar panel', 'Tab / ← / →'],
+      ['Zoom de la forma de onda: acercar / alejar', '+ / − (también la rueda del ratón sobre la onda)'],
       ['Buscar', 'Ctrl + F'], ['Grabar', 'F9'], ['Pantalla completa', 'F11'], ['Herramientas de desarrollo', 'F12'],
       ['Modo laptop', 'F8 (activar/desactivar)'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
       ['EQ kill', 'Clic derecho sobre HI/MID/LOW'], ['Ajuste fino de knobs/faders', 'Mayús + arrastrar'], ['Valor por defecto', 'Doble clic']
