@@ -304,7 +304,7 @@ export class Autoplay extends Emitter {
     if (this.mix) this.finishMix();
     if (this.ending && !this.ready) { this.app.toast('Autoplay: no quedan más pistas en la lista', 'info'); return false; }
     this.force = true;
-    this.app.toast('Autoplay: siguiente ⏭');
+    this.app.toast('Autoplay: siguiente »');
     return true;
   }
 

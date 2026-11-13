@@ -67,6 +67,7 @@ Funciona con **cualquier controladora MIDI**: un asistente aprende cada control 
 | **Mezclador** | 2 o 4 canales; gain, EQ con kill, filtro, PFL, faders, crossfader con 4 curvas, master con limitador, cue mix, split |
 | **Efectos** | 2 unidades × 3 ranuras, 36 efectos sincronizados al BPM (echo, reverb, flanger, filtros, bitcrush, risers…) y presets |
 | **Biblioteca** | Archivos y carpetas, etiquetas ID3/FLAC, búsqueda, columnas configurables, crates y subcrates ordenables, smart crates, Prepare, historial (CSV), Camelot. Ctrl+Supr elimina al instante con Deshacer |
+| **Limpiar biblioteca** | Duplicados (exactos, también con otras etiquetas, y la misma canción en otra calidad) con propuesta de cuál conservar y fusión de cues/crates/historial; etiquetas sucias o que faltan con propuestas (nombre del archivo, carpeta, tu biblioteca e internet, con carátula) y escritura en MP3/FLAC sin tocar el audio; avisos de calidad; Papelera de Windows y deshacer todo |
 | **Importar** | rekordbox (XML), Traktor (NML), VirtualDJ, Serato (`.crate`), M3U/M3U8, cues y beatgrid guardados en MP3/FLAC |
 | **Online** | Listas de YouTube con el reproductor oficial; listas de Spotify (solo metadatos, para encontrar las canciones en tu biblioteca) |
 | **Análisis** | BPM, tonalidad, forma de onda de 3 bandas, auto-gain, estructura (intro, drops, breaks, outro) y energía 1-10 |

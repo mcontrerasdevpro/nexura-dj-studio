@@ -76,7 +76,7 @@ function prune(copiasDir, keep = KEEP) {
   return removed;
 }
 
-// Hace una copia. reason: auto | manual | actualizacion | antes-de-restaurar.
+// Hace una copia. reason: auto | manual | actualizacion | antes-de-restaurar | limpieza.
 // Con la biblioteca dañada no se hace (salvo allowDamaged): una copia mala desplazaría a las buenas.
 function makeBackup(dataDir, copiasDir, { reason = 'manual', version = '', now = new Date(), keep = KEEP, allowDamaged = false } = {}) {
   const files = dataFiles(dataDir);

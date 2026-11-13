@@ -1,5 +1,6 @@
 // Interfaz de un deck
 import { el, fmtTime, CUE_COLORS, clamp, keyColor, DECK_COLORS } from '../util.js';
+import { TC } from './theme.js';
 import { btn, Fader } from './controls.js';
 import { WaveDetail, WaveOverview } from './waveform.js';
 import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES } from '../audio/deck.js';
@@ -36,7 +37,7 @@ export class DeckUI {
     // selector de capa (solo con 4 decks): 1|3 a la izquierda, 2|4 a la derecha
     const pair = [d.idx % 2, d.idx % 2 + 2];
     this.layerTabs = el('div', { class: 'layer-tabs', title: 'Deck visible en este lado' },
-      ...pair.map(i => { const b = btn(String(i + 1), { cls: 'micro layer-tab', onClick: () => app.focusDeck(i) }); b.style.setProperty('--lc', DECK_COLORS[i]); b.dataset.deck = i; return b; }));
+      ...pair.map(i => { const b = btn(String(i + 1), { cls: 'micro layer-tab', onClick: () => app.focusDeck(i) }); b.style.setProperty('--lc', `var(--deck${i})`); b.dataset.deck = i; return b; }));
     const head = el('div', { class: 'deck-head' },
       el('div', { class: 'deck-num' }, String(n)), this.layerTabs,
       el('div', { class: 'deck-meta' }, this.title, el('div', { class: 'd-sub' }, this.ytBadge, this.artist)),
@@ -122,10 +123,11 @@ export class DeckUI {
     this.semisEl = el('span', { class: 'val' }, '0');
     const jumpRow = el('div', { class: 'row jump' },
       el('span', { class: 'lbl' }, 'JUMP'),
-      btn('⏪', { cls: 'tiny', onClick: () => d.beatJump(-d.jumpBeats) }),
+      // « y »: ⏪/⏩ salen en Windows como emoji azul (también con el selector de texto U+FE0E)
+      btn('«', { cls: 'tiny', title: 'Saltar atrás', onClick: () => d.beatJump(-d.jumpBeats) }),
       el('span', { class: 'sizepick' },
         btn('−', { cls: 'micro', onClick: () => d.setJumpSize(-1) }), this.jumpSize, btn('+', { cls: 'micro', onClick: () => d.setJumpSize(1) })),
-      btn('⏩', { cls: 'tiny', onClick: () => d.beatJump(d.jumpBeats) }),
+      btn('»', { cls: 'tiny', title: 'Saltar adelante', onClick: () => d.beatJump(d.jumpBeats) }),
       el('span', { class: 'sep' }),
       el('span', { class: 'lbl' }, 'KEY'),
       btn('−', { cls: 'tiny', onClick: () => d.keyShift(-1) }), this.semisEl,
@@ -317,7 +319,7 @@ export class DeckUI {
       const s = d.padState(i);
       p.querySelector('.pad-label').textContent = s.label || '';
       p.classList.toggle('lit', !!s.on);
-      p.style.setProperty('--pad', s.on ? (s.color || 'var(--accent)') : (s.dim || 'transparent'));
+      p.style.setProperty('--pad', s.on ? (s.color || 'var(--pad-on)') : (s.dim || 'transparent'));
       p.classList.toggle('dim', !s.on && !!s.dim);
       p.classList.toggle('cueloop', !!s.loop);
       p.classList.toggle('active', !!s.active);
@@ -451,7 +453,7 @@ export class DeckUI {
     ctx.translate(w / 2, h / 2);
     // fondo
     const g = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
-    g.addColorStop(0, '#1a2a47'); g.addColorStop(1, '#0a1222');
+    g.addColorStop(0, TC['platter-in']); g.addColorStop(1, TC['platter-out']);
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
     // surcos
@@ -473,12 +475,12 @@ export class DeckUI {
     ctx.restore();
     // centro: BPM, pitch y tiempos (como en las cabinas digitales)
     const cx = w / 2, cy = h / 2, ri = r * 0.66;
-    ctx.fillStyle = '#060b15';
+    ctx.fillStyle = TC['platter-hub'];
     ctx.beginPath(); ctx.arc(cx, cy, ri, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = accent; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(cx, cy, ri, 0, Math.PI * 2); ctx.stroke();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#8ea6cc'; ctx.font = '700 17px Inter, sans-serif';
+    ctx.fillStyle = TC['platter-label']; ctx.font = '700 17px Inter, sans-serif';
     ctx.fillText(`DECK ${d.idx + 1} · ${d.vinyl ? 'VINYL' : 'JOG'}`, cx, cy - ri * 0.62);
     const bpm = d.currentBpm;
     ctx.fillStyle = '#ffffff'; ctx.font = '700 58px "Cascadia Mono", Consolas, monospace';
@@ -487,10 +489,10 @@ export class DeckUI {
     ctx.fillStyle = accent; ctx.font = '700 22px "Cascadia Mono", Consolas, monospace';
     ctx.fillText((pct >= 0 ? '+' : '') + pct.toFixed(1) + '%', cx, cy + ri * 0.17);
     if (d.track) {
-      ctx.fillStyle = '#c8d8f5'; ctx.font = '600 20px "Cascadia Mono", Consolas, monospace';
+      ctx.fillStyle = TC['platter-time']; ctx.font = '600 20px "Cascadia Mono", Consolas, monospace';
       ctx.fillText(fmtTime(time), cx, cy + ri * 0.45);
       const rem = Math.max(0, d.duration - time);
-      ctx.fillStyle = rem < 30 && d.playing ? '#ffa31a' : '#8ea6cc';
+      ctx.fillStyle = rem < 30 && d.playing ? '#ffa31a' : TC['platter-label'];
       ctx.fillText('-' + fmtTime(rem), cx, cy + ri * 0.7);
     }
   }

@@ -85,11 +85,12 @@ export function camelotCompatible(a, b) {
   return na === nb;
 }
 
-// Colores de deck: 1 azul, 2 rojo, 3 verde, 4 naranja
-export const DECK_COLORS = ['#1e9bff', '#ff3b47', '#2ee06a', '#ffa31a'];
-export const DECK_LIGHT = ['#7fd0ff', '#ff8a92', '#8ff0b0', '#ffc878'];
+// Colores de deck: 1 azul, 2 rojo, 3 verde, 4 naranja (los del tema Grafito; theme.js pone los del tema activo)
+export const DECK_COLORS = ['#2f9bff', '#ff4d5e', '#2ee06a', '#ffa31a'];
+export const DECK_LIGHT = ['#8cc8ff', '#ff9aa4', '#8ff0b0', '#ffc878'];
 
-export const CUE_COLORS = ['#ff3b47', '#ffa31a', '#ffd21a', '#2ee06a', '#1ee0ff', '#1e9bff', '#a35bff', '#ff4fa8'];
+// Colores de hot cues, crates y sampler: sin azul, que es la identidad del Deck 1 (antes las posiciones 5 y 6 eran cian y azul)
+export const CUE_COLORS = ['#ff3b47', '#ffa31a', '#ffd21a', '#2ee06a', '#2fd8c8', '#9ad62a', '#a35bff', '#ff4fa8'];
 
 export function parseBpm(v) {
   const n = parseFloat(String(v || '').replace(',', '.'));

@@ -39,6 +39,8 @@ import { UpdatesUI } from './ui/updates-ui.js';
 import { Welcome } from './ui/welcome.js';
 import { LegalUI } from './ui/legal-ui.js';
 import { ReleaseNotes } from './ui/release-notes.js';
+import { CleanupUI } from './ui/cleanup-ui.js';
+import { applyTheme, themeId, DEFAULT_THEME } from './ui/theme.js';
 
 const DEFAULTS = {
   outputMode: 'auto', masterDevice: '', cueDevice: '', latency: 'normal',
@@ -46,11 +48,13 @@ const DEFAULTS = {
   minBpm: 85, maxBpm: 175, motorStart: 4, motorStop: 4, jogSensitivity: 1,
   invertPitch: false, mc4000PhonesMidi: false, midiProfiles: {}, xfCurve: 'smooth', waveZoom: 6,
   historyAfter: 30, loadOnPlaying: 'play', slipRelease: 0, stemSlipMode: 'mute', stemSlipBeats: 1,
-  protectLibrary: false, libCols: null, libColsSame: true, libColsByView: {}, libArtSize: 'small', crateSort: 'custom', crateSubTracks: true, libRail: 'auto', libHistOpen: false, folderToCrates: true, crateCollapsed: [], deckLayout: 'auto', stemsDir: '', stemsModel: 'htdemucs', stemsAuto: true, stemsBackground: true, autoAnalyze: true,
+  protectLibrary: false, libCols: null, libColsSame: true, libColsByView: {}, libArtSize: 'small', crateSort: 'custom', crateSubTracks: true, libRail: 'auto', libHistOpen: false, folderToCrates: true, cleanupTrash: true, cleanupWriteFiles: true, crateCollapsed: [], deckLayout: 'auto', stemsDir: '', stemsModel: 'htdemucs', stemsAuto: true, stemsBackground: true, autoAnalyze: true,
   expansions: { flip: false, fxPresets: false, laptop: false, video: false, dvs: false, pitchTime: false },
   ytApiKey: '', ytClientId: '', ytClientSecret: '', spotifyClientId: '',
   // 1.0: actualizaciones, contador anónimo (null = no se ha preguntado → no se envía) y bienvenida
   autoUpdate: true, prereleaseUpdates: false, statsEnabled: null, welcomeDone: false,
+  // 1.0.0-rc.4: tema de color (grafito | carbon | azul); quien actualiza sin él también empieza en Grafito
+  theme: DEFAULT_THEME,
   panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
 };
 
@@ -75,6 +79,7 @@ class App extends Emitter {
     if (saved) this.settings = { ...DEFAULTS, ...saved, panels: { ...DEFAULTS.panels, ...(saved.panels || {}) } };
     this.settings.expansions = { ...DEFAULTS.expansions, ...(this.settings.expansions || {}) };
     this.settings.autoplay = autoplayOptions(this.settings.autoplay);
+    this.settings.theme = applyTheme(this.settings.theme);
     this.info = await platform.info();
     this.feedback = new Feedback(this);
     this.feedback.log('INFO', 'app', `Inicio de la interfaz · ${this.info.version} · ${navigator.language} · ${innerWidth}×${innerHeight} @${devicePixelRatio}`);
@@ -169,6 +174,7 @@ class App extends Emitter {
 
   setSetting(k, v) {
     this.settings[k] = v;
+    if (k === 'theme') this.settings[k] = v = applyTheme(themeId(v));
     if (k === 'xfCurve') this.engine.setXfCurve(v);
     if (k === 'deckLayout') setTimeout(() => this.updateDeckMode(), 0);
     if (k === 'stemsBackground' && v && this.stems) this.stems.syncBackground();
@@ -223,6 +229,7 @@ class App extends Emitter {
     this.mixerUI = new MixerUI(this, $('#mixer'));
     this.samplerUI = new SamplerUI(this, $('#sampler'));
     this.libraryUI = new LibraryUI(this, $('#library'));
+    this.cleanupUI = new CleanupUI(this);
     this.waves = this.decks.map((d, i) => new WaveDetail($('#wave' + i), d, this));
     this.decks.forEach((d, i) => d.on('track', async (t) => {
       const w = t && !d.isYT ? await this.analyzer.getWave(t.id) : null;
@@ -267,6 +274,7 @@ class App extends Emitter {
       { label: 'Novedades de esta versión', fn: () => this.notes.show() },
       { label: 'Ver bienvenida', fn: () => this.welcome.open() },
       { label: 'Atajos de teclado', fn: () => this.settingsUI.open('keys') },
+      { label: 'Herramientas · Limpiar biblioteca…', fn: () => this.cleanupUI.open('all') },
       { label: 'Copias de seguridad de la biblioteca', fn: () => this.settingsUI.open('library') },
       { label: 'Licencia de uso', fn: () => this.legal.show('licencia') },
       { label: 'Política de privacidad', fn: () => this.legal.show('privacidad') },
@@ -1061,7 +1069,7 @@ class App extends Emitter {
     const B = 'KeyQ KeyW KeyE KeyR KeyT KeyY KeyU KeyI'.split(' ');
     document.addEventListener('keydown', (e) => {
       const tag = (e.target.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || this._modal || this.welcome?.isOpen) return;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || this._modal || this.welcome?.isOpen || this.cleanupUI?.isOpen) return;
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyF') { e.preventDefault(); this.libraryUI.searchIn.focus(); return; }
       // Supr = quitar de la vista (crate, Prepare) o de la biblioteca, con el foco en la tabla;
       // Ctrl+Supr = eliminar de la biblioteca al instante (sin confirmar), con pistas seleccionadas y el foco

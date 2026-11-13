@@ -1,9 +1,12 @@
 // Formas de onda: vista de detalle con desplazamiento (beatgrid, cues, loops)
 // y vista general de la pista completa.
-import { clamp, DECK_COLORS, DECK_LIGHT } from '../util.js';
+import { clamp, DECK_COLORS, DECK_LIGHT, CUE_COLORS } from '../util.js';
 import { tempoChanges } from '../audio/grid.js';
+import { TC } from './theme.js';
 
-const SEC_COLORS = { intro: '#1ee0ff', drop: '#ff3b47', break: '#a35bff', outro: '#ffa31a' };
+const SEC_COLORS = { intro: CUE_COLORS[4], drop: '#ff3b47', break: '#a35bff', outro: '#ffa31a' };
+// Colores de frecuencias (graves rojo, medios verde, agudos azul): se conservan en todos los temas
+// colores-ok: C_HIGH es el color de los agudos de la forma de onda
 const C_LOW = [235, 45, 40], C_MID = [60, 205, 70], C_HIGH = [45, 110, 255];
 
 // Precalcula un color por bloque de la forma de onda
@@ -37,16 +40,16 @@ function drawYouTube(ctx, w, h, d, detail) {
   const bh = detail ? Math.min(24, Math.max(10, h * 0.32)) : Math.max(6, h - 12);
   const y = label ? Math.max(17, (h - bh) / 2 + 4) : (h - bh) / 2;
   const xOf = (t) => b.x0 + clamp(t / d.duration, 0, 1) * b.len;
-  ctx.fillStyle = '#141d30';
+  ctx.fillStyle = TC['wave-track'];
   ctx.fillRect(b.x0, y, b.len, bh);
   if (label) {
     ctx.font = '600 10px Inter, sans-serif'; ctx.textAlign = 'left';
-    ctx.fillStyle = '#8295b8';
+    ctx.fillStyle = TC['wave-label'];
     ctx.fillText('▶ Vídeo de YouTube · sin forma de onda', b.x0 + 4, 12);
   }
   if (!d.duration) {
     if (detail) {
-      ctx.fillStyle = '#5a7096'; ctx.font = '11px Inter, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = TC['wave-text']; ctx.font = '11px Inter, sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('Esperando la duración del vídeo…', w / 2, y + bh / 2 + 4);
     }
     return;
@@ -63,7 +66,7 @@ function drawYouTube(ctx, w, h, d, detail) {
     const lw = ctx.measureText('▶ Vídeo de YouTube · sin forma de onda').width;
     ctx.font = '600 10px "Cascadia Mono", Consolas, monospace';
     if (lw + ctx.measureText(s).width + 24 < b.len) {
-      ctx.textAlign = 'right'; ctx.fillStyle = '#8ea6cc';
+      ctx.textAlign = 'right'; ctx.fillStyle = TC['wave-label'];
       ctx.fillText(s, w - b.x0 - 4, 12);
     }
   }
@@ -156,11 +159,11 @@ export class WaveDetail {
     if (!this.c.isConnected || !this.c.clientWidth || !this.c.clientHeight) return;
     const { ctx, w, h } = fitCanvas(this.c);
     const d = this.deck;
-    ctx.fillStyle = '#050911';
+    ctx.fillStyle = TC['wave-bg'];
     ctx.fillRect(0, 0, w, h);
     const mid = h / 2;
     if (!d.track) {
-      ctx.fillStyle = '#3a5383'; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = TC['wave-empty']; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(`DECK ${d.idx + 1} — arrastra una pista aquí`, w / 2, mid + 4);
       return;
     }
@@ -199,7 +202,7 @@ export class WaveDetail {
         ctx.globalAlpha = 1;
       }
     } else {
-      ctx.fillStyle = '#5a7096'; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = TC['wave-text']; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('Analizando…', w / 2, mid + 4);
     }
 
@@ -233,7 +236,7 @@ export class WaveDetail {
         const label = (prev ? (m.bpm > prev.bpm ? '▲ ' : '▼ ') : '') + m.bpm.toFixed(2) + ' BPM';
         ctx.font = '700 10px Inter, sans-serif'; ctx.textAlign = 'left';
         const tw = ctx.measureText(label).width + 10, y = Math.min(h - 30, 15);
-        ctx.fillStyle = 'rgba(5,9,17,0.85)'; ctx.fillRect(x + 3, y, tw, 14);
+        ctx.fillStyle = TC['wave-chip']; ctx.fillRect(x + 3, y, tw, 14);
         ctx.strokeStyle = '#ff9a1f'; ctx.strokeRect(x + 3.5, y + 0.5, tw - 1, 13);
         ctx.fillStyle = '#ffb35a'; ctx.fillText(label, x + 8, y + 11);
       });
@@ -243,7 +246,7 @@ export class WaveDetail {
     for (const sct of d.track.sections || []) {
       const x = xOf(sct.t);
       if (x < -80 || x > w + 10) continue;
-      const col = SEC_COLORS[sct.type] || '#8fa3c7';
+      const col = SEC_COLORS[sct.type] || TC.muted;
       ctx.font = '700 9px Inter, sans-serif'; ctx.textAlign = 'left';
       const tw = ctx.measureText(sct.label).width + 8;
       ctx.globalAlpha = 0.85; ctx.fillStyle = col; ctx.fillRect(Math.round(x), 0, tw, 12); ctx.globalAlpha = 1;
@@ -254,7 +257,7 @@ export class WaveDetail {
       const info = `${d.currentBpm.toFixed(1)} BPM${d.displayKey ? ' · ' + d.displayKey : ''}${d.track.energy ? ' · ⚡' + d.track.energy : ''}`;
       ctx.font = '700 10px Inter, sans-serif'; ctx.textAlign = 'right';
       const tw = ctx.measureText(info).width + 10;
-      ctx.fillStyle = 'rgba(5,9,17,0.75)'; ctx.fillRect(w - tw - 4, 2, tw, 14);
+      ctx.fillStyle = TC['wave-chip']; ctx.fillRect(w - tw - 4, 2, tw, 14);
       ctx.fillStyle = DECK_LIGHT[d.idx]; ctx.fillText(info, w - 9, 12);
     }
 
@@ -348,7 +351,7 @@ export class WaveOverview {
     if (!this.c.isConnected || !this.c.clientWidth || !this.c.clientHeight) return;
     const { ctx, w, h } = fitCanvas(this.c);
     const d = this.deck;
-    ctx.fillStyle = '#070d1a';
+    ctx.fillStyle = TC['overview-bg'];
     ctx.fillRect(0, 0, w, h);
     if (d.track && d.isYT) return drawYouTube(ctx, w, h, d, false);
     if (!d.track || !d.duration) return;
@@ -356,7 +359,7 @@ export class WaveOverview {
       if (!this.cache || this.cache.w !== w || this.cache.h !== h) this.render(w, h);
       ctx.drawImage(this.cache.canvas, 0, 0, w, h);
     } else {
-      ctx.fillStyle = '#1a2740';
+      ctx.fillStyle = TC['overview-empty'];
       ctx.fillRect(0, h / 2 - 3, w, 6);
     }
     const px = (d.time / d.duration) * w;
@@ -377,7 +380,7 @@ export class WaveOverview {
     // secciones de la IA: triángulos de color en la parte superior
     for (const sct of d.track.sections || []) {
       const x = (sct.t / d.duration) * w;
-      ctx.fillStyle = SEC_COLORS[sct.type] || '#8fa3c7';
+      ctx.fillStyle = SEC_COLORS[sct.type] || TC.muted;
       ctx.beginPath(); ctx.moveTo(x - 4, 0); ctx.lineTo(x + 4, 0); ctx.lineTo(x, 6); ctx.fill();
     }
     // aviso de final de pista (últimos 30 s)

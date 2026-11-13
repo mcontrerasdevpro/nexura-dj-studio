@@ -20,6 +20,10 @@ const report = require('./main/report');
 const stats = require('./main/stats');
 const ytSearch = require('./src/js/shared/yt-search.js');
 const { createUpdater } = require('./main/updater');
+const cleanupScan = require('./main/cleanup-scan');
+const tagWriter = require('./main/tag-writer');
+const recycle = require('./main/recycle');
+const { createMb } = require('./main/musicbrainz');
 
 // Servicios de NexuraIA (src/config/servicios.json; vacío = desactivado):
 //   feedbackUrl → informes y sugerencias (POST JSON); statsUrl → contador anónimo de uso (POST JSON);
@@ -712,10 +716,127 @@ function registerStemsIpc() {
 }
 
 // ---------------------------------------------------------------------------
+// «Limpiar biblioteca»: análisis en un hilo aparte (main/cleanup-worker.js), consultas a MusicBrainz, Papelera
+// de Windows y escritura de etiquetas con copia de las originales. Datos en userData/data/limpieza.
+// NEXURA_MB_URL / NEXURA_CAA_URL solo para pruebas (servidor simulado).
+// ---------------------------------------------------------------------------
+const cleanupDir = () => path.join(dataDir(), 'limpieza');
+const CLEAN_EXT = /\.(mp3|wav|flac|ogg|oga|opus|m4a|aac|mp4|webm|wma|ape|wv|mpc|aif|aiff|alac|ac3|mp2|ra)$/i;
+let cleanWorker = null, cleanJob = null, cleanPrio = 'normal', onlineCancel = false, mbClient = null;
+const sendCleanup = (ev) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('cleanup:event', ev); };
+const mb = () => mbClient || (mbClient = createMb({
+  cacheDir: cleanupDir(), userAgent: `NexuraDJStudio/${app.getVersion()} (contacto@nexuraia.com)`,
+  base: webUrl(process.env.NEXURA_MB_URL) || undefined, caa: webUrl(process.env.NEXURA_CAA_URL) || undefined,
+  gap: process.env.NEXURA_MB_URL ? 50 : 1100
+}));
+function cleanupWorker() {
+  if (cleanWorker) return cleanWorker;
+  const { Worker } = require('worker_threads');
+  cleanWorker = new Worker(path.join(__dirname, 'main', 'cleanup-worker.js'));
+  cleanWorker.on('message', (m) => {
+    if (!m || !cleanJob) return;
+    if (m.t === 'progress') sendCleanup(m);
+    else if (m.t === 'done') { const j = cleanJob; cleanJob = null; j.resolve(m.result); }
+    else if (m.t === 'error') { const j = cleanJob; cleanJob = null; j.reject(new Error(m.message)); }
+  });
+  cleanWorker.on('error', (e) => { log('ERROR', 'limpieza', 'Hilo de análisis: ' + e.message); if (cleanJob) { cleanJob.reject(e); cleanJob = null; } cleanWorker = null; });
+  cleanWorker.on('exit', () => { cleanWorker = null; });
+  return cleanWorker;
+}
+function registerCleanupIpc() {
+  ipcMain.handle('cleanup:scan', async (_e, entries) => {
+    if (cleanJob) throw new Error('Ya hay un análisis en marcha');
+    const list = (entries || []).filter(x => x && typeof x.path === 'string' && x.path && !/^(web|youtube):/.test(x.path)).map(x => ({ id: String(x.id), path: x.path }));
+    await fsp.mkdir(cleanupDir(), { recursive: true });
+    const cacheFile = path.join(cleanupDir(), 'archivos.ndjson');
+    const t0 = Date.now();
+    let res;
+    try {
+      res = await new Promise((resolve, reject) => {
+        cleanJob = { resolve, reject };
+        cleanupWorker().postMessage({ t: 'scan', entries: list, cacheFile, priority: cleanPrio });
+      });
+    } catch (e) {
+      // sin hilo aparte (no debería pasar): se hace aquí mismo, cediendo el turno entre archivos
+      log('WARN', 'limpieza', 'Análisis sin hilo aparte: ' + e.message);
+      cleanJob = { resolve: () => {}, reject: () => {}, inline: true, cancel: false };
+      try { res = await cleanupScan.scanEntries(list, { cache: cleanupScan.createCache(cacheFile), cancelled: () => cleanJob && cleanJob.cancel, priority: () => cleanPrio, onProgress: sendCleanup }); }
+      finally { cleanJob = null; }
+    }
+    log('INFO', 'limpieza', `Análisis: ${list.length} archivos en ${Math.round((Date.now() - t0) / 100) / 10} s (${res.stats.cached} de la caché, ${res.stats.probed} leídos, ${res.stats.partial}+${res.stats.full} huellas)${res.cancelled ? ' · cancelado' : ''}`);
+    return res;
+  });
+  ipcMain.handle('cleanup:cancel', () => {
+    onlineCancel = true;
+    if (cleanJob && cleanJob.inline) cleanJob.cancel = true;
+    else if (cleanWorker) cleanWorker.postMessage({ t: 'cancel' });
+    return true;
+  });
+  ipcMain.handle('cleanup:priority', (_e, v) => { cleanPrio = v === 'low' ? 'low' : 'normal'; if (cleanWorker) cleanWorker.postMessage({ t: 'priority', v: cleanPrio }); return cleanPrio; });
+  // MusicBrainz: queries [{ key, artist, title }] → { results, offline, done }
+  ipcMain.handle('cleanup:lookup', async (_e, queries) => {
+    onlineCancel = false;
+    const list = (queries || []).slice(0, 5000).map(q => ({ key: String(q.key), artist: String(q.artist || '').slice(0, 200), title: String(q.title || '').slice(0, 200) }));
+    const r = await mb().lookupMany(list, { onProgress: sendCleanup, cancelled: () => onlineCancel });
+    log('INFO', 'limpieza', `Internet: ${r.done}/${list.length} consultas${r.offline ? ' · sin conexión' : ''}`);
+    return r;
+  });
+  ipcMain.handle('cleanup:cover', async (_e, releaseId) => {
+    try { const b = await mb().cover(String(releaseId || '')); return b ? `data:image/${b[0] === 0xff ? 'jpeg' : 'png'};base64,` + b.toString('base64') : null; } catch (_) { return null; }
+  });
+  ipcMain.handle('cleanup:trash', async (_e, paths) => {
+    const list = (paths || []).map(String).filter(p => CLEAN_EXT.test(p) && path.isAbsolute(p));
+    const r = await recycle.trashFiles(list, { trashItem: (p) => shell.trashItem(p) });
+    log('INFO', 'limpieza', `Papelera: ${r.filter(x => x.ok).length}/${list.length} archivos`);
+    return r;
+  });
+  ipcMain.handle('cleanup:restoreTrash', async (_e, paths) => {
+    const out = [];
+    for (const p of (paths || []).map(String).filter(p => CLEAN_EXT.test(p) && path.isAbsolute(p))) out.push(await recycle.restoreFromRecycleBin(p));
+    log('INFO', 'limpieza', `Devueltos de la Papelera: ${out.filter(x => x.how === 'restored').length}/${out.length}`);
+    return out;
+  });
+  const dropArt = async (id) => { if (!/^[a-z0-9_-]+$/i.test(String(id || ''))) return; for (const e of ['.jpg', '.none']) await fsp.unlink(path.join(dataDir(), 'art', id + e)).catch(() => {}); };
+  // writes: [{ id, path, fields, cover: releaseId }] → [{ id, path, ok, error, size, backup, cover }]
+  ipcMain.handle('cleanup:writeTags', async (_e, opId, writes) => {
+    if (!/^[a-z0-9_-]+$/i.test(String(opId || ''))) throw new Error('Operación no válida');
+    const dir = path.join(cleanupDir(), 'etiquetas', opId);
+    const out = [];
+    let n = 0;
+    for (const w of writes || []) {
+      const p = String(w.path || '');
+      const fields = {};
+      for (const k of ['title', 'artist', 'album', 'year', 'genre']) if (w.fields && w.fields[k] != null) fields[k] = String(w.fields[k]).slice(0, 500);
+      let cover = null;
+      if (w.cover) { try { const b = await mb().cover(String(w.cover)); if (b) cover = { data: b, mime: b[0] === 0xff ? 'image/jpeg' : 'image/png' }; } catch (_) { /* sin carátula */ } }
+      const r = await tagWriter.writeTags(p, fields, { cover, backupBase: path.join(dir, String(++n)) });
+      if (r.ok && cover) await dropArt(w.id);
+      out.push({ id: w.id, path: p, ok: r.ok, error: r.error || '', size: r.size || 0, backup: r.ok ? `${opId}/${n}` : '', cover: !!(r.ok && cover) });
+      sendCleanup({ t: 'write', done: out.length, total: writes.length });
+    }
+    log('INFO', 'limpieza', `Etiquetas escritas: ${out.filter(x => x.ok).length}/${out.length} archivos`);
+    return out;
+  });
+  ipcMain.handle('cleanup:restoreTags', async (_e, items) => {
+    const out = [];
+    for (const it of items || []) {
+      const b = String(it.backup || '');
+      if (!/^[a-z0-9_-]+\/\d+$/i.test(b)) { out.push({ path: it.path, ok: false, error: 'copia no válida' }); continue; }
+      const r = await tagWriter.restoreTags(String(it.path || ''), path.join(cleanupDir(), 'etiquetas', ...b.split('/')));
+      if (r.ok) await dropArt(it.id);
+      out.push({ id: it.id, path: it.path, ok: r.ok, error: r.error || '', size: r.size || 0 });
+    }
+    log('INFO', 'limpieza', `Etiquetas originales devueltas: ${out.filter(x => x.ok).length}/${out.length} archivos`);
+    return out;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
 function registerIpc() {
   registerStemsIpc();
+  registerCleanupIpc();
   ipcMain.handle('app:info', () => ({
     os: `${os.type()} ${os.release()} (${os.arch()})`, electron: process.versions.electron,
     isBeta: /beta|alpha|rc/i.test(app.getVersion()), osLabel: OS_LABEL, store: !!process.windowsStore,
@@ -904,11 +1025,13 @@ function registerIpc() {
 
   // ---- Copias de seguridad de la biblioteca (main/backup.js)
   ipcMain.handle('backup:list', () => ({ dir: copiasDir(), list: backup.listBackups(copiasDir()) }));
-  ipcMain.handle('backup:create', () => {
-    const r = backupNow('manual');
+  // reason: 'manual' (Ajustes) o 'limpieza' (justo antes de aplicar cambios de «Limpiar biblioteca»)
+  ipcMain.handle('backup:create', (_e, reason) => {
+    const why = reason === 'limpieza' ? 'limpieza' : 'manual';
+    const r = backupNow(why);
     if (r.skipped === 'danada') throw new Error('La biblioteca actual está dañada: no se copia para no desplazar las copias buenas.');
     if (r.skipped) throw new Error('Todavía no hay biblioteca que copiar.');
-    log('INFO', 'copias', 'Copia manual ' + r.name);
+    log('INFO', 'copias', (why === 'limpieza' ? 'Copia antes de limpiar ' : 'Copia manual ') + r.name);
     return r;
   });
   // Restaurar: copia del estado actual, sustituir los datos y reiniciar la app (sin dejar que la interfaz

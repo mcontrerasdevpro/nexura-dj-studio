@@ -7,10 +7,11 @@ import { MidiWizard } from './midi-wizard.js';
 import { platform } from '../platform.js';
 import { STATS_FIELDS_TEXT } from './legal-ui.js';
 import { CRATE_SORTS } from '../library/library.js';
+import { THEMES } from './theme.js';
 
 const TABS = { general: 'General', audio: 'Audio', ai: '✨ IA', play: 'Reproducción', library: 'Biblioteca', midi: 'MIDI / Controladores', expansions: 'Expansiones', youtube: 'YouTube', spotify: 'Spotify', keys: 'Atajos', about: 'Acerca de' };
 const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
-const BACKUP_REASONS = { auto: 'Automática', manual: 'Manual', actualizacion: 'Antes de actualizar', 'antes-de-restaurar': 'Antes de restaurar' };
+const BACKUP_REASONS = { auto: 'Automática', manual: 'Manual', actualizacion: 'Antes de actualizar', 'antes-de-restaurar': 'Antes de restaurar', limpieza: 'Antes de limpiar la biblioteca' };
 
 export class SettingsUI {
   constructor(app) { this.app = app; this.tab = 'general'; }
@@ -115,7 +116,11 @@ export class SettingsUI {
     platform.stats.preview({ decks: app.deckCount, controller: !!app.midi?.controllerName })
       .then(j => { preview.textContent = JSON.stringify({ ...j, id: '(identificador aleatorio de esta instalación)' }, null, 2); })
       .catch(() => { preview.textContent = '—'; });
+    const themeSel = select(THEMES, s.theme, (v) => app.setSetting('theme', v));
+    themeSel.id = 'set-theme';
     p.append(...[
+      el('h3', {}, 'Apariencia'),
+      this.row('Tema de color', themeSel, 'Grafito: gris oscuro neutro, el color solo marca lo importante (Deck 1 azul, Deck 2 rojo, selección ámbar). Carbón: aún más oscuro. Azul noche: la paleta azul de las versiones anteriores. Se aplica al momento'),
       el('h3', {}, 'Actualizaciones'),
       this.row('Buscar actualizaciones automáticamente', this.toggle('autoUpdate'), 'Al abrir la app y cada 6 horas, en segundo plano. Si hay una versión nueva verás un aviso abajo; tú decides cuándo descargarla. Nunca se reinicia con música sonando: en ese caso se instala al cerrar'),
       this.row('Recibir versiones de prueba', this.toggle('prereleaseUpdates'), 'Ofrece también versiones -rc y -beta (pueden tener errores)'),
