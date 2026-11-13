@@ -1,5 +1,5 @@
 // Interfaz del mezclador
-import { el, DECK_COLORS } from '../util.js';
+import { el } from '../util.js';
 import { Knob, Fader, btn, select } from './controls.js';
 import { XF_CURVES, peakToMeter } from '../audio/engine.js';
 
@@ -77,10 +77,12 @@ export class MixerUI {
   buildStrip(ch, i) {
     const s = {};
     const set = (n) => (v) => ch.set(n, v);
-    s.trim = new Knob({ label: 'GAIN', value: ch.values.trim, def: 0.5, bipolar: true, size: 32, color: DECK_COLORS[i], onChange: set('trim') });
-    s.high = new Knob({ label: 'HI', value: ch.values.high, def: 0.5, bipolar: true, size: 32, color: DECK_COLORS[i], onChange: set('high') });
-    s.mid = new Knob({ label: 'MID', value: ch.values.mid, def: 0.5, bipolar: true, size: 32, color: DECK_COLORS[i], onChange: set('mid') });
-    s.low = new Knob({ label: 'LOW', value: ch.values.low, def: 0.5, bipolar: true, size: 32, color: DECK_COLORS[i], onChange: set('low') });
+    // los knobs del canal en el color de su deck (variable CSS: cambia al instante con el tema)
+    const dc = `var(--deck${i})`;
+    s.trim = new Knob({ label: 'GAIN', value: ch.values.trim, def: 0.5, bipolar: true, size: 32, color: dc, onChange: set('trim') });
+    s.high = new Knob({ label: 'HI', value: ch.values.high, def: 0.5, bipolar: true, size: 32, color: dc, onChange: set('high') });
+    s.mid = new Knob({ label: 'MID', value: ch.values.mid, def: 0.5, bipolar: true, size: 32, color: dc, onChange: set('mid') });
+    s.low = new Knob({ label: 'LOW', value: ch.values.low, def: 0.5, bipolar: true, size: 32, color: dc, onChange: set('low') });
     s.filter = new Knob({ label: 'FILTER', value: ch.values.filter, def: 0.5, bipolar: true, color: '#ffa31a', size: 32, onChange: set('filter') });
     s.cue = btn('CUE', { cls: 'pfl', onClick: () => ch.set('pfl', !ch.values.pfl), title: 'Escucha previa en auriculares' });
     s.fader = new Fader({ vertical: true, value: ch.values.fader, def: 1, length: 112, cls: 'chfader', onChange: set('fader') });

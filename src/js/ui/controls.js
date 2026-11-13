@@ -11,7 +11,7 @@ function arcPath(cx, cy, r, a0, a1) {
 }
 
 export class Knob {
-  constructor({ label = '', value = 0.5, def = value, bipolar = false, size = 38, color = 'var(--accent)', onChange = () => {}, fmt = null, cls = '' }) {
+  constructor({ label = '', value = 0.5, def = value, bipolar = false, size = 38, color = 'var(--knob-arc)', onChange = () => {}, fmt = null, cls = '' }) {
     this.value = value; this.def = def; this.bipolar = bipolar; this.onChange = onChange; this.fmt = fmt;
     this.size = size; this.color = color;
     this.svg = document.createElementNS(SVGNS, 'svg');

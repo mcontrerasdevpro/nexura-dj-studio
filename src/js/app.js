@@ -39,6 +39,7 @@ import { UpdatesUI } from './ui/updates-ui.js';
 import { Welcome } from './ui/welcome.js';
 import { LegalUI } from './ui/legal-ui.js';
 import { ReleaseNotes } from './ui/release-notes.js';
+import { applyTheme, themeId, DEFAULT_THEME } from './ui/theme.js';
 
 const DEFAULTS = {
   outputMode: 'auto', masterDevice: '', cueDevice: '', latency: 'normal',
@@ -51,6 +52,8 @@ const DEFAULTS = {
   ytApiKey: '', ytClientId: '', ytClientSecret: '', spotifyClientId: '',
   // 1.0: actualizaciones, contador anónimo (null = no se ha preguntado → no se envía) y bienvenida
   autoUpdate: true, prereleaseUpdates: false, statsEnabled: null, welcomeDone: false,
+  // 1.0.0-rc.4: tema de color (grafito | carbon | azul); quien actualiza sin él también empieza en Grafito
+  theme: DEFAULT_THEME,
   panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
 };
 
@@ -75,6 +78,7 @@ class App extends Emitter {
     if (saved) this.settings = { ...DEFAULTS, ...saved, panels: { ...DEFAULTS.panels, ...(saved.panels || {}) } };
     this.settings.expansions = { ...DEFAULTS.expansions, ...(this.settings.expansions || {}) };
     this.settings.autoplay = autoplayOptions(this.settings.autoplay);
+    this.settings.theme = applyTheme(this.settings.theme);
     this.info = await platform.info();
     this.feedback = new Feedback(this);
     this.feedback.log('INFO', 'app', `Inicio de la interfaz · ${this.info.version} · ${navigator.language} · ${innerWidth}×${innerHeight} @${devicePixelRatio}`);
@@ -169,6 +173,7 @@ class App extends Emitter {
 
   setSetting(k, v) {
     this.settings[k] = v;
+    if (k === 'theme') this.settings[k] = v = applyTheme(themeId(v));
     if (k === 'xfCurve') this.engine.setXfCurve(v);
     if (k === 'deckLayout') setTimeout(() => this.updateDeckMode(), 0);
     if (k === 'stemsBackground' && v && this.stems) this.stems.syncBackground();
