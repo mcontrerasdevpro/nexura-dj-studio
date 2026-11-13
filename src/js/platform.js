@@ -227,7 +227,7 @@ export const platform = {
   backup: {
     available: !!(N && N.backup),
     list() { return N && N.backup ? N.backup.list() : Promise.resolve({ dir: '', list: [] }); },
-    create() { if (!N || !N.backup) throw new Error('Las copias de seguridad solo están disponibles en la app de escritorio'); return N.backup.create(); },
+    create(reason) { if (!N || !N.backup) throw new Error('Las copias de seguridad solo están disponibles en la app de escritorio'); return N.backup.create(reason); },
     restore(name) { if (!N || !N.backup) throw new Error('Las copias de seguridad solo están disponibles en la app de escritorio'); return N.backup.restore(name); },
     openFolder() { if (N && N.backup) return N.backup.openFolder(); }
   },
@@ -247,6 +247,23 @@ export const platform = {
     download() { return N && N.updates ? N.updates.download() : Promise.resolve(false); },
     install() { return N && N.updates ? N.updates.install() : Promise.resolve(false); },
     onEvent(fn) { return N && N.updates ? N.updates.onEvent(fn) : () => {}; }
+  },
+  // «Limpiar biblioteca» (solo escritorio: lee los archivos, consulta MusicBrainz, Papelera y etiquetas).
+  // Modo simulado para pruebas: window.__nexuraCleanupMock con las mismas funciones (onEvent(fn) incluido).
+  cleanup: {
+    get api() { return window.__nexuraCleanupMock || (N && N.cleanup) || null; },
+    get available() { return !!this.api; },
+    call(name, ...args) { const a = this.api; if (!a) throw new Error('«Limpiar biblioteca» solo está disponible en la app de escritorio'); return a[name](...args); },
+    scan(entries) { return this.call('scan', entries); },
+    cancel() { return this.api ? this.api.cancel() : Promise.resolve(true); },
+    priority(v) { return this.api ? this.api.priority(v) : Promise.resolve(v); },
+    lookup(queries) { return this.call('lookup', queries); },
+    cover(releaseId) { return this.api ? this.api.cover(releaseId) : Promise.resolve(null); },
+    trash(paths) { return this.call('trash', paths); },
+    restoreTrash(paths) { return this.call('restoreTrash', paths); },
+    writeTags(opId, writes) { return this.call('writeTags', opId, writes); },
+    restoreTags(items) { return this.call('restoreTags', items); },
+    onEvent(fn) { return this.api && this.api.onEvent ? this.api.onEvent(fn) : () => {}; }
   },
   // Stems (solo escritorio: necesita el motor de Demucs instalado en tools/stems)
   stems: {

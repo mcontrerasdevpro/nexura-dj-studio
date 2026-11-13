@@ -188,8 +188,18 @@ export class Library extends Emitter {
   restoreRemoved(undo) {
     if (!undo || !undo.tracks || !undo.tracks.length || !this.guard('remove')) return false;
     const back = new Map(undo.tracks.filter(t => !this.tracks.has(t.id)).map(t => [t.id, t]));
+    // undo guardado en disco («Limpiar biblioteca»): en vez del orden completo, la pista que iba delante de cada una
+    let order = undo.order;
+    if (!order && undo.prev) {
+      order = [...this.tracks.keys()];
+      for (const t of undo.tracks) {
+        if (!back.has(t.id)) continue;
+        const p = undo.prev[t.id], i = p == null ? -1 : order.indexOf(p);
+        if (p != null && i < 0) order.push(t.id); else order.splice(i + 1, 0, t.id);
+      }
+    }
     const map = new Map();
-    for (const id of undo.order) { const t = this.tracks.get(id) || back.get(id); if (t) map.set(id, t); }
+    for (const id of order || []) { const t = this.tracks.get(id) || back.get(id); if (t) map.set(id, t); }
     for (const [id, t] of this.tracks) if (!map.has(id)) map.set(id, t);
     this.tracks = map;
     // contenido anterior de cada lista, sin las pistas que ya no existen; las añadidas después, al final
@@ -200,6 +210,73 @@ export class Library extends Emitter {
     this._byPath = null;
     this.saveSoon();
     this.emit('change');
+    return true;
+  }
+
+  // «Limpiar biblioteca» → resolver duplicados. groups: [{ keep, drop: [ids] }]. En la pista que se conserva se
+  // juntan los datos de las otras: crates (en el sitio de la otra), Prepare, historial, reproducciones,
+  // valoración y, si no tiene, sus hot cues / loops / Cue Loops. Las otras se quitan de la biblioteca (sus
+  // archivos no se tocan aquí). Devuelve lo necesario para undoMerge o false (biblioteca protegida).
+  mergeDuplicates(groups) {
+    if (!this.guard('remove') || !this.guard('crateTracks')) return false;
+    const list = groups.map(g => ({ keep: this.tracks.get(g.keep), drop: g.drop.filter(id => id !== g.keep && this.tracks.has(id)).map(id => this.tracks.get(id)) })).filter(g => g.keep && g.drop.length);
+    const map = new Map();
+    for (const g of list) for (const t of g.drop) map.set(t.id, g.keep.id);
+    const undo = { keepers: [], crates: [], prepare: null, history: [], removed: null, at: Date.now() };
+    const empty = (a) => !(a || []).some(Boolean);
+    const copy = (a) => JSON.parse(JSON.stringify(a || Array(8).fill(null)));
+    for (const { keep, drop } of list) {
+      undo.keepers.push({ id: keep.id, before: { cues: copy(keep.cues), loops: copy(keep.loops), cueLoops: keep.cueLoops ? copy(keep.cueLoops) : null, rating: keep.rating || 0, plays: keep.plays || 0, lastPlayed: keep.lastPlayed || 0 } });
+      for (const k of ['cues', 'loops', 'cueLoops']) {
+        if (!empty(keep[k])) continue;
+        const from = drop.filter(t => !empty(t[k])).sort((a, b) => b[k].filter(Boolean).length - a[k].filter(Boolean).length)[0];
+        if (from) keep[k] = copy(from[k]);
+      }
+      keep.rating = Math.max(keep.rating || 0, ...drop.map(t => t.rating || 0));
+      keep.plays = (keep.plays || 0) + drop.reduce((s, t) => s + (t.plays || 0), 0);
+      keep.lastPlayed = Math.max(keep.lastPlayed || 0, ...drop.map(t => t.lastPlayed || 0));
+    }
+    // crates y Prepare: la conservada ocupa el sitio de la quitada (sin repetirse)
+    const swap = (ids) => { const out = [], seen = new Set(); for (const i of ids) { const j = map.get(i) || i; if (!seen.has(j)) { seen.add(j); out.push(j); } } return out; };
+    for (const c of this.crates) if (c.ids.some(i => map.has(i))) { const ids = c.ids.slice(); c.ids = swap(c.ids); undo.crates.push({ id: c.id, ids, after: c.ids.slice() }); }
+    if (this.prepare.some(i => map.has(i))) { const ids = this.prepare.slice(); this.prepare = swap(this.prepare); undo.prepare = { ids, after: this.prepare.slice() }; }
+    for (const h of this.history) h.entries.forEach((e, i) => { if (map.has(e.id)) { undo.history.push({ s: h.id, i, id: e.id }); e.id = map.get(e.id); } });
+    undo.removed = this.remove([...map.keys()]);
+    return undo;
+  }
+  // Deshace mergeDuplicates: vuelven las pistas quitadas (con todos sus datos), las crates, Prepare y el historial
+  // como estaban, y la conservada recupera sus datos anteriores
+  undoMerge(undo) {
+    if (!undo || !this.guard('remove') || !this.guard('crateTracks')) return false;
+    if (undo.removed) this.restoreRemoved(undo.removed);
+    for (const k of undo.keepers) { const t = this.tracks.get(k.id); if (t) { Object.assign(t, k.before); if (!k.before.cueLoops) delete t.cueLoops; } }
+    // contenido anterior; lo añadido después de resolver (que no estaba antes ni justo después) se conserva al final
+    const back = (u, cur) => { const had = new Set([...u.ids, ...u.after]); return [...u.ids.filter(i => this.tracks.has(i)), ...cur.filter(i => !had.has(i))]; };
+    for (const u of undo.crates) { const c = this.crate(u.id); if (c) c.ids = back(u, c.ids); }
+    if (undo.prepare) this.prepare = back(undo.prepare, this.prepare);
+    for (const u of undo.history) { const h = this.history.find(x => x.id === u.s); if (h && h.entries[u.i]) h.entries[u.i].id = u.id; }
+    this.saveSoon(); this.emit('change');
+    return true;
+  }
+  // «Limpiar biblioteca» → etiquetas: changes [{ id, patch }] → deshacer [{ id, before }] o false
+  applyTagEdits(changes) {
+    if (!this.guard('tags')) return false;
+    const undo = [];
+    for (const { id, patch } of changes) {
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      const before = {};
+      for (const k of Object.keys(patch)) before[k] = t[k] === undefined ? null : t[k];
+      undo.push({ id, before });
+      Object.assign(t, patch);
+    }
+    this.saveSoon(); this.emit('change');
+    return undo;
+  }
+  undoTagEdits(undo) {
+    if (!undo || !this.guard('tags')) return false;
+    for (const { id, before } of undo) { const t = this.tracks.get(id); if (t) for (const [k, v] of Object.entries(before)) { if (v === null) delete t[k]; else t[k] = v; } }
+    this.saveSoon(); this.emit('change');
     return true;
   }
 
