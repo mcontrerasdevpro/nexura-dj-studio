@@ -150,12 +150,30 @@ export class SettingsUI {
       this.row('Latencia', select({ low: 'Baja (5 ms)', normal: 'Normal', safe: 'Segura' }, s.latency, (v) => { app.setSetting('latency', v); toast('Reinicia la aplicación para aplicar la latencia', 'info'); })),
       el('p', { class: 'hint' }, `Modo actual: ${app.outputDesc || '—'} · Canales del dispositivo: ${app.engine.ctx.destination.maxChannelCount} · Frecuencia: ${app.engine.ctx.sampleRate} Hz · Latencia: ${Math.round((app.engine.ctx.baseLatency + (app.engine.ctx.outputLatency || 0)) * 1000)} ms`),
       el('h3', {}, 'Rendimiento'),
-      this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
-      this.row('Aceleración por GPU', el('span', { id: 'set-gpu', class: 'gpu-state' + (gpuOn ? ' ok' : '') }, gpuText),
-        gpuOn ? 'La interfaz y las formas de onda se dibujan con la tarjeta gráfica' : 'Sin aceleración, la interfaz usa más CPU. Actualiza el controlador de la tarjeta gráfica'),
+      this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps regulares (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
+      ...this.gpuRows(gpu, gpuOn, gpuText),
       el('h3', {}, 'Grabación'),
       el('p', { class: 'hint' }, `Las grabaciones (WAV) se guardan en: ${app.info.recordings}`),
       btn('Probar salida (tono 1 s)', { cls: 'small', onClick: () => this.testTone() })].filter(Boolean));
+  }
+  // «Aceleración por GPU»: Automática / Desactivada. Se guarda en arranque.json (main.js) y se aplica al
+  // reiniciar la app; mientras tanto se avisa y se ofrece «Reiniciar ahora»
+  gpuRows(gpu, gpuOn, gpuText) {
+    const app = this.app, offNow = !!app.info?.gpuOff;
+    const state = el('span', { id: 'set-gpu', class: 'gpu-state' + (gpuOn ? ' ok' : '') }, offNow ? 'Desactivada por ti (la interfaz se dibuja con la CPU)' : gpuText);
+    const note = el('p', { class: 'set-note', id: 'set-gpu-restart', hidden: true }, 'Hace falta reiniciar la app para aplicar el cambio. ',
+      btn('Reiniciar ahora', { cls: 'small primary', onClick: async () => { note.querySelector('button').disabled = true; await app.flushAll?.(); await platform.gpu.relaunch(); } }));
+    const rows = [this.row('Estado de la aceleración por GPU', state,
+      offNow ? 'Sin aceleración la interfaz usa algo más de CPU. Vuelve a «Automática» si la forma de onda no se congelaba' : gpuOn ? 'La interfaz y las formas de onda se dibujan con la tarjeta gráfica' : 'Sin aceleración, la interfaz usa más CPU. Actualiza el controlador de la tarjeta gráfica')];
+    if (!platform.gpu.available) return rows;
+    const sel = select({ auto: 'Automática', off: 'Desactivada (usar si la forma de onda se congela)' }, offNow ? 'off' : 'auto', async (v) => {
+      const r = await platform.gpu.set(v);
+      note.hidden = !r || (r.setting === 'off') === r.offNow;
+      app.feedback?.log('INFO', 'rendimiento', 'Aceleración por GPU: ' + v + ' (al reiniciar)');
+    });
+    sel.id = 'set-gpu-mode';
+    platform.gpu.get().then(r => { if (!r) return; sel.value = r.setting; note.hidden = (r.setting === 'off') === r.offNow; }).catch(() => {});
+    return [this.row('Aceleración por GPU', sel, 'Con algunas tarjetas gráficas y controladores la forma de onda puede quedarse parada aunque la música siga. Desactívala si te pasa: se dibuja con el procesador'), note, ...rows];
   }
   testTone() {
     const ctx = this.app.engine.ctx;

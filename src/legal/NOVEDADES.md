@@ -1,6 +1,6 @@
 # Novedades de Nexura DJ Studio
 
-## Próxima versión · en preparación
+## 1.0.0-rc.5 · noviembre de 2026
 
 ### Ves más de lo que viene
 - La línea blanca que marca lo que suena ya no tiene que estar en el centro de la forma de onda: ahora, de serie, está **a la izquierda**, así que ves el triple de lo que viene que de lo que ya ha pasado.
@@ -17,6 +17,14 @@
 - Ahora la IA pone **como mucho 5 cues por tema**, siempre en los mismos pads: **1 Inicio** (el primer golpe, aunque haya silencio delante), **2 Entrada** (cuando acaba la intro), **3 Drop** (la subida principal), **4 Break** (la bajada principal) y **5 Outro** (donde empieza la salida).
 - Todos caen **cuadrados a la frase** (cada 8 compases, o 4 si el tema va así) y con al menos 16 compases entre uno y otro. Si una parte no está clara, no se pone: mejor 3 cues buenos que 5 sin sentido.
 - **Tus cues no se tocan nunca.** Los automáticos que ya tenías se recalculan al cargar la pista o con clic derecho → «✨ Cues automáticos (IA)».
+
+### Fluida también en equipos con procesador antiguo
+- **La forma de onda ya no se queda parada mientras analizas.** Analizar tus pistas se hace ahora en segundo plano, en otro núcleo del procesador: la música, la onda y los platos siguen fluidos aunque estés analizando cientos de temas mientras pinchas. En un equipo lento, antes la onda se paraba hasta 2 segundos cada pocas pistas.
+- **Con bibliotecas grandes (miles de pistas) ya no hay tirones al guardar.** La biblioteca se guarda agrupando los cambios y en los momentos de calma, sin parar la onda. Al cerrar la app se guarda todo lo pendiente: no se pierde nada.
+- **El «Modo rendimiento» va de verdad a 30 fps regulares.** Antes, en un equipo justo, se quedaba en unos 20 fps a tirones y se veía peor que sin él.
+- Cargar una pista larga en un deck mientras suena el otro ya no da un tirón a la onda.
+- Nuevo ajuste **«Aceleración por GPU»** en **Ajustes → Audio → Rendimiento**: **Automática** (la de siempre) o **Desactivada**. Con algunas tarjetas gráficas y controladores la forma de onda puede quedarse congelada aunque la música siga; si te pasa, desactívala y pulsa **«Reiniciar ahora»**. Si la app detecta que la onda se ha congelado con la música sonando, te lo sugiere ella misma.
+- El **informe de errores** puede llevar ahora un **diagnóstico de rendimiento** (procesador, memoria, tarjeta gráfica, número de pistas y lo fluida que ha ido la onda en los últimos minutos), sin tus canciones ni tus carpetas, para que podamos ayudarte si tu equipo va justo.
 
 ## 1.0.0-rc.4 · noviembre de 2026
 

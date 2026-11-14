@@ -1,5 +1,5 @@
 // Biblioteca: pistas, crates, smart crates, historial, prepare y listas de YouTube
-import { Emitter, hashId, uid, debounce } from '../util.js';
+import { Emitter, hashId, uid, yieldToUI } from '../util.js';
 import { platform } from '../platform.js';
 import { energyFrom, ENERGY_VERSION } from '../analysis/analysis-core.js';
 import { normalizeParents, canMoveInto, crateTrackIds, deletePlan, descendantIds, flattenTree, parentId, ensurePath } from './crate-tree.js';
@@ -31,7 +31,9 @@ const PROTECTED = {
   remove: 'borrar pistas', crate: 'crear, borrar, renombrar u ordenar crates', crateTracks: 'añadir o quitar pistas de las crates',
   smart: 'crear, editar o borrar smart crates', tags: 'editar etiquetas ni valoraciones', grid: 'cambiar el BPM ni el beatgrid'
 };
-export const CRATE_SORTS = { created: 'Como se crearon', alpha: 'Por nombre (A → Z)', custom: 'Personalizado (arrastrar)' };
+// Guardado diferido: espera tras el último cambio, espera máxima desde el primero y pistas por trozo
+const SAVE_DELAY = 1500, SAVE_MAX_WAIT = 8000, SAVE_CHUNK = 400;
+export const CRATE_SORTS ={ created: 'Como se crearon', alpha: 'Por nombre (A → Z)', custom: 'Personalizado (arrastrar)' };
 
 export class Library extends Emitter {
   constructor() {
@@ -46,7 +48,73 @@ export class Library extends Emitter {
     this.protected = false;   // lo fija la app desde settings.protectLibrary
     this.subTracks = true;    // settings.crateSubTracks: una crate muestra también las pistas de sus subcrates
     this._byPath = null;      // índice ruta → pista (las pistas relocalizadas conservan su id antiguo)
-    this.saveSoon = debounce(() => this.save(), 800);
+    // Guardado agrupado y diferido (ver saveSoon / save / flush)
+    this._dirty = false; this._timer = 0; this._firstDirty = 0; this._saving = null; this._run = 0;
+  }
+
+  // Guardar la biblioteca: con miles de pistas, enviarla entera como objeto al proceso principal bloqueaba la
+  // interfaz más de 1 s en un PC lento (la forma de onda se quedaba parada). Ahora:
+  // - saveSoon() solo marca que hay cambios: se guarda 1,5 s después del último cambio (como mucho 8 s después
+  //   del primero) y en un momento de reposo (requestIdleCallback), así que un análisis de 100 pistas no guarda
+  //   100 veces seguidas;
+  // - se envía como texto JSON preparado a trozos de SAVE_CHUNK pistas, cediendo el hilo entre trozos;
+  // - flush() guarda ya, de una vez, si hay algo pendiente: al cerrar la app (main.js lo pide antes de cerrar la
+  //   ventana), al recargar y antes de instalar una actualización. No se pierde nada.
+  saveSoon() {
+    this._dirty = true;
+    const now = Date.now();
+    if (!this._firstDirty) this._firstDirty = now;
+    clearTimeout(this._timer);
+    const delay = Math.max(0, Math.min(SAVE_DELAY, this._firstDirty + SAVE_MAX_WAIT - now));
+    this._timer = setTimeout(() => {
+      const go = () => { this.save().catch(e => console.warn('biblioteca: no se pudo guardar', e)); };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 2000 }); else go();
+    }, delay);
+  }
+  get savePending() { return this._dirty || !!this._saving; }
+
+  // Texto JSON de la biblioteca. chunked: cede el hilo entre trozos de pistas (devuelve null si otro guardado
+  // lo ha sustituido mientras tanto)
+  async _serialize(chunked, run) {
+    const list = [...this.tracks.values()], parts = [];
+    for (let i = 0; i < list.length; i += SAVE_CHUNK) {
+      parts.push(list.slice(i, i + SAVE_CHUNK).map(t => JSON.stringify(t)).join(','));
+      if (chunked && i + SAVE_CHUNK < list.length) {
+        await yieldToUI();
+        if (run !== this._run) return null;
+      }
+    }
+    const rest = JSON.stringify({ crates: this.crates, smart: this.smart, history: this.history.slice(-200), prepare: this.prepare, ytPlaylists: this.ytPlaylists });
+    return '{"version":1,"tracks":[' + parts.filter(Boolean).join(',') + '],' + rest.slice(1);
+  }
+
+  // Guarda ahora (a trozos). Si llegan cambios mientras se guarda, se vuelve a programar otro guardado.
+  async save() {
+    clearTimeout(this._timer);
+    if (this._saving) await this._saving.catch(() => {});
+    const run = ++this._run;
+    this._dirty = false; this._firstDirty = 0;
+    const job = (async () => {
+      const text = await this._serialize(true, run);
+      if (text == null) return false;             // lo ha sustituido flush()
+      return platform.storeSet('library', text);
+    })();
+    this._saving = job;
+    try { return await job; }
+    catch (e) { this._dirty = true; throw e; }
+    finally { if (this._saving === job) this._saving = null; if (this._dirty) this.saveSoon(); }
+  }
+
+  // Guarda ya y de una vez (sin ceder el hilo) si hay cambios pendientes o un guardado a medias
+  async flush() {
+    if (!this._dirty && !this._saving) return true;
+    clearTimeout(this._timer);
+    const run = ++this._run;                      // un guardado a trozos en curso ya no envía nada
+    this._dirty = false; this._firstDirty = 0;
+    const text = await this._serialize(false, run);
+    const p = platform.storeSet('library', text);
+    this._saving = null;
+    return p;
   }
 
   // Comprobación central de «Proteger biblioteca»: devuelve false (y avisa) si la acción no está permitida
@@ -81,16 +149,6 @@ export class Library extends Emitter {
     }
     if (migrated) this.saveSoon();
     this.emit('change');
-  }
-
-  async save() {
-    await platform.storeSet('library', {
-      version: 1,
-      tracks: [...this.tracks.values()],
-      crates: this.crates, smart: this.smart,
-      history: this.history.slice(-200),
-      prepare: this.prepare, ytPlaylists: this.ytPlaylists
-    });
   }
 
   get(id) { return this.tracks.get(id); }

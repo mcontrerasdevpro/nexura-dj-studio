@@ -37,6 +37,7 @@ import { WaveDetail } from './ui/waveform.js';
 import { SettingsUI } from './ui/settings-ui.js';
 import { btn } from './ui/controls.js';
 import { Feedback } from './ui/feedback.js';
+import { PerfDiag } from './ui/perf-diag.js';
 import { UpdatesUI } from './ui/updates-ui.js';
 import { Welcome } from './ui/welcome.js';
 import { LegalUI } from './ui/legal-ui.js';
@@ -63,6 +64,10 @@ const DEFAULTS = {
   panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
 };
 
+// ArrayBuffer con solo los bytes del archivo para decodeAudioData (que lo vacía): sin copiar si ya lo es (lo
+// normal con la lectura por fetch; copiar 60 MB en cada análisis cargaba la memoria y la recolección de basura)
+const ownBuffer = (bytes) => (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+
 class App extends Emitter {
   constructor() {
     super();
@@ -87,6 +92,7 @@ class App extends Emitter {
     this.settings.theme = applyTheme(this.settings.theme);
     this.info = await platform.info();
     this.feedback = new Feedback(this);
+    this.perfDiag = new PerfDiag(this);
     this.feedback.log('INFO', 'app', `Inicio de la interfaz · ${this.info.version} · ${navigator.language} · ${innerWidth}×${innerHeight} @${devicePixelRatio}`);
     this.legal = new LegalUI(this);
     this.notes = new ReleaseNotes(this);
@@ -158,7 +164,11 @@ class App extends Emitter {
     setInterval(() => this.automix.tick().catch(e => console.error('automix', e)), 100);
     setInterval(() => { try { this.autoplay.tick(); } catch (e) { console.error('autoplay', e); } }, 100);
     this.updateStatus();
-    window.addEventListener('beforeunload', () => { this.library.save(); platform.storeSet('settings', this.settings); });
+    // guardar lo pendiente (la biblioteca se guarda de forma diferida): al cerrar la ventana lo pide main.js y
+    // espera a que esté en disco; beforeunload cubre recargar la página y el modo navegador
+    this.flushAll = () => Promise.all([this.library.flush(), platform.storeSet('settings', this.settings)]);
+    platform.onFlush(this.flushAll);
+    window.addEventListener('beforeunload', () => { this.library.flush(); platform.storeSet('settings', this.settings); });
   }
 
   // Contador anónimo (main/stats.js): solo si el usuario lo ha permitido y hay statsUrl; una vez al día
@@ -377,13 +387,25 @@ class App extends Emitter {
   // Se dibuja como mucho a 60 fps (30 en «Modo rendimiento»), también con pantallas de 120-240 Hz: antes la
   // app redibujaba todo en cada refresco de la pantalla (240 veces por segundo en un monitor de 240 Hz)
   // Entre frames se duerme con un temporizador (en vez de despertar en cada refresco solo para descartarlo)
+  // Antes se dormía `iv - 7` ms DESPUÉS de dibujar: en un PC lento (frame de 10-15 ms) se perdía el refresco
+  // siguiente y 30 fps se quedaban en 20 irregulares (peor que 60). Ahora el frame cuenta desde que empieza, se
+  // dibuja en el primer refresco de pantalla en que toca (con medio refresco de margen) y solo se duerme con
+  // pantallas de más de 90 Hz, despertando con margen de sobra
   frame(ts = performance.now()) {
     const next = () => requestAnimationFrame((t) => this.frame(t));
-    const iv = 1000 / (this.settings.perfMode ? 30 : 60);
-    if (ts - (this._lastRender || 0) < iv - 3) { next(); return; }
+    const dt = ts - (this._tick || ts);
+    this._tick = ts;
+    // refresco de la pantalla, medido entre dos callbacks seguidos (sin dormir en medio)
+    if (this._direct && dt > 2 && dt < 50) this._vsync = this._vsync ? this._vsync * 0.9 + dt * 0.1 : dt;
+    this.perfDiag?.tick(ts);
+    const vs = this._vsync || 1000 / 60, iv = 1000 / (this.settings.perfMode ? 30 : 60);
+    if (ts - (this._lastRender || 0) < iv - vs / 2) { this._direct = true; next(); return; }
     this._lastRender = ts;
+    this.perfDiag?.beginFrame();
     this.render();
-    if (iv - 7 > 4) setTimeout(next, iv - 7); else next();
+    this.perfDiag?.endFrame();
+    const sleep = iv - (performance.now() - ts) - vs * 2;
+    if (vs < 11 && sleep > 4) { this._direct = false; setTimeout(next, sleep); } else { this._direct = true; next(); }
   }
   render() {
     try {
@@ -477,9 +499,7 @@ class App extends Emitter {
 
   async decode(track) {
     if (this.bufferCache.has(track.id)) return this.bufferCache.get(track.id);
-    const bytes = await platform.readFile(track.path);
-    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    const buf = await this.engine.ctx.decodeAudioData(ab);
+    const buf = await this.engine.ctx.decodeAudioData(ownBuffer(await platform.readFile(track.path)));
     this.bufferCache.set(track.id, buf);
     while (this.bufferCache.size > 4) this.bufferCache.delete(this.bufferCache.keys().next().value);
     return buf;
@@ -498,6 +518,7 @@ class App extends Emitter {
       return;
     }
     const resume = wasPlaying && mode === 'play';
+    const req = d._loadReq = (d._loadReq || 0) + 1; // si mientras tanto se pide otra pista en este deck, gana la última
     this.engine.resume();
     if (t.source === 'youtube') {
       try { await d.loadYouTube(t); if (resume && d.track === t) d.play(); } catch (e) { toast('No se pudo cargar el vídeo: ' + e.message, 'error'); }
@@ -513,7 +534,9 @@ class App extends Emitter {
       toast(lost ? `Archivo perdido: ${t.path}. Clic derecho → «Relocalizar archivos perdidos…»` : `No se pudo abrir el archivo: ${t.path}`, 'error', 7000);
       return;
     }
-    await d.load(t, buf);
+    const copies = await Deck.copyChannels(buf);
+    if (d._loadReq !== req) return;
+    await d.load(t, buf, copies);
     if (resume && d.track === t) d.play(); // la nueva pista entra sonando, sin silencio
     // stems ya separados: se cargan en segundo plano (la pista suena mientras tanto)
     if (t.stems && this.settings.stemsAuto !== false) this.stems.loadForDeck(d).catch(e => console.warn('stems', e));
@@ -661,6 +684,23 @@ class App extends Emitter {
     toast(n ? `Cues/beatgrid leídos de ${n} archivo(s)` : 'Esos archivos no tienen cues ni beatgrid guardados', n ? 'ok' : 'info');
   }
 
+  // Analiza una pista que no está en un deck → metadatos. En el escritorio, en el analizador en segundo plano
+  // (otro proceso: el audio no pasa por la interfaz); si no está o falla, aquí: leer, decodificar y pasar los
+  // canales al worker sin copiarlos (el AudioBuffer solo sirve para analizar)
+  async analyzeOne(t) {
+    const opts = { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm };
+    if (platform.analysis.available && !this._bgAnalysisOff) {
+      try { return await this.analyzer.analyzeFile(t, opts, this.engine.ctx.sampleRate); }
+      catch (e) {
+        if (/No se encuentra/.test(e.message)) throw e;
+        this._bgAnalysisOff = true;
+        this.feedback.log('WARN', 'analisis', 'Analizador en segundo plano no disponible: ' + e.message);
+      }
+    }
+    const buf = await this.engine.ctx.decodeAudioData(ownBuffer(await platform.readFile(t.path)));
+    return this.analyzer.analyzeTrack(t, buf, opts, true);
+  }
+
   async analyzeMany(tracks, force = false) {
     // sin «force»: pistas sin analizar y las analizadas con una versión antigua (sin estructura/energía de la IA);
     // se respetan el BPM y la tonalidad bloqueados por el usuario
@@ -676,12 +716,11 @@ class App extends Emitter {
       status.textContent = `Analizando ${++n}/${list.length}: ${t.title}`;
       try {
         if (force) this.library.update(t.id, { bpmLocked: false, keyLocked: false, grid: null });
-        const bytes = await platform.readFile(t.path);
-        const buf = await this.engine.ctx.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-        const meta = await this.analyzer.analyzeTrack(t, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
-        this.library.update(t.id, meta);
-        this.applyAutoCues(t);
+        this.library.update(t.id, await this.analyzeOne(t));
+        await this.applyAutoCues(t);
       } catch (e) { console.warn('análisis', t.path, e); }
+      // entre pista y pista se deja dibujar al menos un frame (con la ventana minimizada no hay frames: 100 ms)
+      await new Promise(r => { const t = setTimeout(r, 100); requestAnimationFrame(() => setTimeout(() => { clearTimeout(t); r(); }, 0)); });
     }
     status.textContent = '';
     this.analyzing = false;
@@ -907,11 +946,7 @@ class App extends Emitter {
     for (const t of list) {
       if (!t.sections) {
         status.textContent = `IA: analizando estructura ${++n}/${list.length}: ${t.title}`;
-        try {
-          const buf = await this.decode(t);
-          const meta = await this.analyzer.analyzeTrack(t, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
-          this.library.update(t.id, meta);
-        } catch (e) { console.warn('IA cues', t.path, e); continue; }
+        try { this.library.update(t.id, await this.analyzeOne(t)); } catch (e) { console.warn('IA cues', t.path, e); continue; }
       }
       // acción manual: recalcula los automáticos (también en pistas con cues del usuario, que se respetan)
       const wave = await this.analyzer.getWave(t.id).catch(() => null);
