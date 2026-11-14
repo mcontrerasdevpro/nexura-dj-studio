@@ -1,6 +1,6 @@
 # Novedades de Nexura DJ Studio
 
-## Próxima versión · en preparación
+## 1.0.0-rc.5 · noviembre de 2026
 
 ### Ves más de lo que viene
 - La línea blanca que marca lo que suena ya no tiene que estar en el centro de la forma de onda: ahora, de serie, está **a la izquierda**, así que ves el triple de lo que viene que de lo que ya ha pasado.
