@@ -19,6 +19,7 @@ import { FxUnitUI } from './ui/fx-ui.js';
 import { SamplerUI } from './ui/sampler-ui.js';
 import { LibraryUI } from './ui/library-ui.js';
 import { Assistant } from './ai/assistant.js';
+import { AUTO_CUE_VERSION } from './ai/autocues-core.js';
 import { Automix } from './ai/automix.js';
 import { Autoplay } from './ai/autoplay.js';
 import { AUTOPLAY_DEFAULTS, autoplayOptions } from './ai/autoplay-core.js';
@@ -56,6 +57,9 @@ const DEFAULTS = {
   autoUpdate: true, prereleaseUpdates: false, statsEnabled: null, welcomeDone: false,
   // 1.0.0-rc.4: tema de color (grafito | carbon | azul); quien actualiza sin él también empieza en Grafito
   theme: DEFAULT_THEME,
+  // posición del cabezal en la onda de detalle (left 25 % | third 33 % | center 50 %) y sensibilidad del
+  // plato y de la onda con el ratón (low | normal | high)
+  playheadPos: 'left', platterSensitivity: 'normal',
   panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
 };
 
@@ -528,6 +532,9 @@ class App extends Emitter {
       d.emit('track', t);
       if (d.sync) d.syncNow(true);
     }
+    // pista ya analizada con cues automáticos de la versión anterior (sin sentido): se recalculan al cargarla
+    // (solo los automáticos; con la biblioteca protegida no se cambia nada)
+    if (wave && !this.library.protected && (t.cues || []).some(c => c && c.auto && c.autoV !== AUTO_CUE_VERSION)) this.applyAutoCues(t);
   }
 
   // Importa bibliotecas y listas de otros programas DJ: colecciones XML / NML, listas .m3u/.m3u8,
@@ -880,10 +887,17 @@ class App extends Emitter {
   }
 
   // ------------------------------------------------------------------ IA
-  // Cues automáticos tras analizar, solo si la pista no tiene ningún hot cue
-  applyAutoCues(t) {
-    if (!this.settings.aiAutoCues || !t || (t.cues || []).some(Boolean)) return;
-    if (this.ai.autoCues(t)) this.decks.forEach(d => { if (d.track === t) d.emit('cues'); });
+  // Cues automáticos tras analizar: se recalculan los automáticos (los del usuario no se tocan nunca). Una pista
+  // preparada a mano (solo cues del usuario) se deja como está, sin añadirle automáticos.
+  async applyAutoCues(t) {
+    if (!this.settings.aiAutoCues || !t) return;
+    const cues = (t.cues || []).filter(Boolean);
+    if (cues.length && !cues.some(c => c.auto)) return;
+    try {
+      const wave = await this.analyzer.getWave(t.id).catch(() => null);
+      this.ai.autoCues(t, { wave });
+      this.decks.forEach(d => { if (d.track === t) d.emit('cues'); });
+    } catch (e) { console.warn('cues automáticos', t.path, e); }
   }
   async aiAutoCues(tracks) {
     const list = tracks.filter(t => t.source === 'local');
@@ -899,11 +913,13 @@ class App extends Emitter {
           this.library.update(t.id, meta);
         } catch (e) { console.warn('IA cues', t.path, e); continue; }
       }
-      total += this.ai.autoCues(t);
+      // acción manual: recalcula los automáticos (también en pistas con cues del usuario, que se respetan)
+      const wave = await this.analyzer.getWave(t.id).catch(() => null);
+      total += this.ai.autoCues(t, { wave });
       this.decks.forEach(d => { if (d.track === t) d.emit('cues'); });
     }
     status.textContent = '';
-    toast(total ? `IA: ${total} cues creados (intro, drops, breaks y outro)` : 'IA: no había huecos libres o no se detectaron secciones', total ? 'ok' : 'info');
+    toast(total ? `IA: ${total} cues automáticos (Inicio, Entrada, Drop, Break y Outro; tus cues no se tocan)` : 'IA: no se detectaron partes claras o no había pads libres', total ? 'ok' : 'info');
   }
   async aiBuildSet(start) {
     if (!start) return;

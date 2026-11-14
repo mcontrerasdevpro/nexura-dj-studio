@@ -1,8 +1,9 @@
 // Asistente IA de Nexura DJ Studio (100 % local, sin servicios externos):
 // - sugerencia de la siguiente pista (tonalidad Camelot + BPM + energía)
 // - constructor de sets por curva de energía
-// - cues automáticos a partir de la estructura analizada (intro, drops, breaks, outro)
+// - cues automáticos a partir de la energía analizada (Inicio, Entrada, Drop, Break y Outro)
 import { CUE_COLORS } from '../util.js';
+import { autoCuePoints, mergeAutoCues, waveEnergy, waveOnset, curveEnergy } from './autocues-core.js';
 
 const parseCam = (c) => { const m = /^(\d+)([AB])$/.exec(c || ''); return m ? { n: +m[1], l: m[2] } : null; };
 const wheel = (d) => ((d % 12) + 12) % 12;
@@ -121,22 +122,19 @@ export class Assistant {
     return list;
   }
 
-  // Cues automáticos: rellena los hot cues libres con las secciones analizadas
+  // Cues automáticos (ai/autocues-core.js): como mucho 5 (Inicio, Entrada, Drop, Break, Outro), cuadrados a
+  // frase. Reemplaza los automáticos que hubiera y nunca toca los del usuario. `wave` = forma de onda analizada
+  // (sin ella, la curva de energía por frases). Devuelve cuántos cues automáticos quedan.
   static AUTO_COLORS = { intro: CUE_COLORS[4], drop: CUE_COLORS[0], break: CUE_COLORS[6], outro: CUE_COLORS[1] };
-  autoCues(track, { overwrite = false } = {}) {
-    const secs = (track.sections || []).filter(s => s.t >= 0 && (!track.duration || s.t < track.duration - 4));
-    if (!secs.length) return 0;
-    const cues = overwrite ? Array(8).fill(null) : (track.cues || Array(8).fill(null)).slice();
-    const existing = cues.filter(Boolean).map(c => c.t);
-    let n = 0;
-    for (const s of secs) {
-      if (existing.some(t => Math.abs(t - s.t) < 2)) continue;
-      const slot = cues.findIndex(c => !c);
-      if (slot < 0) break;
-      cues[slot] = { t: s.t, color: Assistant.AUTO_COLORS[s.type] || CUE_COLORS[slot], name: s.label, auto: true };
-      existing.push(s.t); n++;
-    }
-    if (n || overwrite) this.app.library.update(track.id, { cues });
+  static AUTO_COLOR_OF = { start: 'intro', entry: 'intro', drop: 'drop', break: 'break', outro: 'outro' };
+  autoCues(track, { wave = null } = {}) {
+    const energy = wave && wave.data ? waveEnergy(wave) : curveEnergy(track);
+    const points = autoCuePoints(track, { energy, onset: wave && wave.data ? waveOnset(wave) : 0 });
+    const colors = Object.fromEntries(Object.entries(Assistant.AUTO_COLOR_OF).map(([k, v]) => [k, Assistant.AUTO_COLORS[v]]));
+    const before = track.cues || Array(8).fill(null);
+    const { cues, n } = mergeAutoCues(before, points, colors);
+    const same = (a, b) => (!a && !b) || (a && b && a.t === b.t && a.name === b.name && a.auto === b.auto);
+    if (cues.some((c, i) => !same(c, before[i]))) this.app.library.update(track.id, { cues });
     return n;
   }
 }
