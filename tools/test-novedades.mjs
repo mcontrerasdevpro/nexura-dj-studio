@@ -29,7 +29,8 @@ const cur = notesFor(list, pkg.version);
 // quita esa marca y entonces tiene que coincidir con el package.json
 const head = list.filter(n => !/en preparación/i.test(n.title));
 const draft = list.slice(0, list.indexOf(head[0]));
-ok(head.length >= 2 && head[0].version === pkg.version && draft.every(n => compareVersions(n.version, pkg.version) > 0),
+// (el borrador puede no tener número aún: «## Próxima versión · en preparación»)
+ok(head.length >= 2 && head[0].version === pkg.version && draft.every(n => !n.version || compareVersions(n.version, pkg.version) > 0),
   `NOVEDADES.md empieza por la versión del package.json (${pkg.version}), o por una posterior «en preparación»`, list.map(n => n.title));
 ok(cur && cur.version === pkg.version && cur.blocks.some(b => b.type === 'ul'), 'notas de la versión actual con puntos', cur && cur.blocks.length);
 const rc2 = list.find(n => n.version === '1.0.0-rc.2');

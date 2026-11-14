@@ -1,5 +1,23 @@
 # Novedades de Nexura DJ Studio
 
+## Próxima versión · en preparación
+
+### Ves más de lo que viene
+- La línea blanca que marca lo que suena ya no tiene que estar en el centro de la forma de onda: ahora, de serie, está **a la izquierda**, así que ves el triple de lo que viene que de lo que ya ha pasado.
+- Elígelo en **Ajustes → Reproducción → «Posición del cabezal»**: **Izquierda (25 %)**, **Un tercio (33 %)** o **Centro (50 %)**, como antes. Se aplica al momento en todos los decks y se recuerda.
+- Los cues, loops, el beatgrid y las marcas siguen exactamente en su sitio respecto a lo que oyes.
+
+### Plato y forma de onda más suaves
+- **Un clic ya no mueve la pista.** Antes, con VINYL, pulsar el plato o la onda mientras sonaba la frenaba todo el rato que mantenías el botón, y la mezcla se descolocaba. Ahora hay que arrastrar al menos 3 píxeles para que haga algo.
+- Se acabaron los saltos de dos beats al tocar el plato cerca del centro: ahora cuenta lo que mueves el ratón, no el ángulo, y el movimiento es proporcional y sin tirones.
+- **Rueda del ratón sobre el plato**: parado, cada paso mueve 1/16 de beat (búsqueda fina); sonando, adelanta o atrasa unos 15 ms, suave, sin cambio de tono brusco.
+- Nuevo ajuste **«Sensibilidad del plato y de la onda»** (Baja, Normal o Alta) en Ajustes → Reproducción. El scratch con intención en modo VINYL suena igual que siempre, y el jog de la controladora no cambia.
+
+### Cues automáticos con sentido
+- Ahora la IA pone **como mucho 5 cues por tema**, siempre en los mismos pads: **1 Inicio** (el primer golpe, aunque haya silencio delante), **2 Entrada** (cuando acaba la intro), **3 Drop** (la subida principal), **4 Break** (la bajada principal) y **5 Outro** (donde empieza la salida).
+- Todos caen **cuadrados a la frase** (cada 8 compases, o 4 si el tema va así) y con al menos 16 compases entre uno y otro. Si una parte no está clara, no se pone: mejor 3 cues buenos que 5 sin sentido.
+- **Tus cues no se tocan nunca.** Los automáticos que ya tenías se recalculan al cargar la pista o con clic derecho → «✨ Cues automáticos (IA)».
+
 ## 1.0.0-rc.4 · noviembre de 2026
 
 ### Limpiar biblioteca

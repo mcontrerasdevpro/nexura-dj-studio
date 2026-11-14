@@ -420,6 +420,8 @@ export class Deck extends Emitter {
   bendDown(dir, coarse = false) { this.setBend(dir * (coarse ? 0.12 : 0.04)); }
   bendUp() { this.setBend(0); this.lastNudgeAt = performance.now(); }
   nudge(v) { if (!this.isYT) { this.lastNudgeAt = performance.now(); this.send({ t: 'nudge', v }); } }
+  // adelanta (+) o atrasa (−) `sec` segundos sonando, con un cambio de velocidad pequeño (rueda del ratón)
+  nudgeBy(sec) { if (!this.isYT && this.playing && sec) { this.lastNudgeAt = performance.now(); this.send({ t: 'nudgeBy', v: sec * this.sr }); } }
 
   // ---------------------------------------------------------------- sync
   // Maestro (src/js/audio/sync.js): uno solo para todos; el primero que suena o el elegido con MASTER

@@ -119,10 +119,12 @@ class DeckProcessor extends AudioWorkletProcessor {
     this.rate = 1;           // multiplicador de tempo (1 = 100 %)
     this.bend = 0;           // pitch bend temporal
     this.nudge = 0;          // empujón del jog (decae)
+    this.nudgeRem = 0;       // muestras que quedan por adelantar (+) o atrasar (−) con `nudgeBy`
     this.cur = 0;            // velocidad actual suavizada
     this.reverse = false;
     this.scratch = false;
     this.scratchTarget = 0;
+    this.lastN = 128;        // muestras del último bloque procesado
     this.loopOn = false; this.loopS = 0; this.loopE = 0;
     this.slipping = false; this.shadow = 0;
     // retorno del slip: al soltar se funde (potencia constante) desde la cabeza «vieja» a la sombra
@@ -155,7 +157,7 @@ class DeckProcessor extends AudioWorkletProcessor {
       case 'load':
         this.L = m.L; this.R = m.R || m.L; this.len = this.L.length; this.stems = null;
         this.ratio = (m.sr || sampleRate) / sampleRate;
-        this.pos = m.pos || 0; this.cur = 0; this.playing = false; this.loopOn = false;
+        this.pos = m.pos || 0; this.cur = 0; this.playing = false; this.loopOn = false; this.nudgeRem = 0;
         this.slipping = false; this.ended = false; this.scratch = false; this.reverse = false; this.xfN = 0;
         this.hold.fill(null); this.holdNext.fill(null); this.hEnv.fill(1); this.hDir.fill(0);
         this.ps.reset();
@@ -182,6 +184,8 @@ class DeckProcessor extends AudioWorkletProcessor {
       case 'rate': this.rate = m.v; break;
       case 'bend': this.bend = m.v; break;
       case 'nudge': this.nudge += m.v; break;
+      // nudgeBy: adelantar / atrasar exactamente m.v muestras con un cambio de velocidad pequeño (rueda del ratón)
+      case 'nudgeBy': if (this.playing) this.nudgeRem += m.v; break;
       case 'seek': case 'seekBy': {
         // seekBy: salto relativo (fase del sync), exacto aunque llegue unos milisegundos después de pedirlo
         const to = Math.max(0, Math.min(this.len - 1, m.t === 'seekBy' ? this.pos + m.v : m.v));
@@ -189,6 +193,7 @@ class DeckProcessor extends AudioWorkletProcessor {
         if (m.xf && this.playing && !this.scratch && Math.abs(to - this.pos) > 64) { this.xfPos = this.pos; this.xfN = this.xfLen = Math.round(0.006 * sampleRate); }
         else this.xfN = 0;
         this.pos = to;
+        if (m.t === 'seek') this.nudgeRem = 0;
         if (!this.slipping) this.shadow = this.pos;
         this.ended = false;
         if (this.scratch) this.scratchTarget = this.pos;
@@ -200,8 +205,11 @@ class DeckProcessor extends AudioWorkletProcessor {
         if (this.loopOn && m.jump && (this.pos >= this.loopE || this.pos < this.loopS)) this.pos = this.loopS;
         break;
       case 'scratch':
+        // al tocar el plato sonando, la pista frena en la distancia que recorre en 2 bloques (≈ 5 ms): con
+        // el objetivo justo en `pos` frenaba de golpe, se pasaba y volvía hacia atrás (un pequeño salto)
+        if (m.v && !this.scratch) this.scratchTarget = this.pos + this.cur * this.lastN * this.ratio * 2;
+        else this.scratchTarget = this.pos;
         this.scratch = !!m.v;
-        this.scratchTarget = this.pos;
         break;
       case 'scratchDelta': this.scratchTarget += m.v; break;
       case 'reverse': this.reverse = !!m.v; break;
@@ -261,13 +269,25 @@ class DeckProcessor extends AudioWorkletProcessor {
 
     // ---- velocidad objetivo
     const prev = this.cur;
+    this.lastN = n;
     if (this.scratch) {
+      // la velocidad sigue al plato con amortiguamiento crítico (5 bloques × 0,8): sin rebotes y sin los
+      // tirones de los movimientos del ratón, que llegan a saltos cada 8-16 ms
       const diff = this.scratchTarget - this.pos;
-      let want = diff / (n * this.ratio * 2.5);
+      let want = diff / (n * this.ratio * 5);
       want = Math.max(-24, Math.min(24, want));
-      this.cur += (want - this.cur) * 0.55;
+      this.cur += (want - this.cur) * 0.8;
+      this.nudgeRem = 0; // la mano manda: un nudge pendiente no se aplica al soltar
     } else {
-      let target = this.playing && !this.ended ? (this.rate + this.bend + this.nudge) : 0;
+      // nudgeBy: como mucho un 6 % más rápido o más lento hasta recorrer lo pedido (sin cambio de tono brusco)
+      let extra = 0;
+      if (this.nudgeRem && this.playing && !this.ended) {
+        const blk = n * this.ratio;
+        extra = Math.max(-0.06, Math.min(0.06, this.nudgeRem / (blk * 12)));
+        this.nudgeRem -= extra * blk;
+        if (Math.abs(this.nudgeRem) < 0.5) this.nudgeRem = 0;
+      } else this.nudgeRem = 0;
+      let target = this.playing && !this.ended ? (this.rate + this.bend + this.nudge + extra) : 0;
       if (this.reverse && this.playing) target = -Math.abs(target || this.rate);
       const T = Math.abs(target) > Math.abs(this.cur) ? this.startT : this.stopT;
       const step = (n / sampleRate) / T;

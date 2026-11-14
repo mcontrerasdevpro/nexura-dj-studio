@@ -3,6 +3,7 @@ import { el, fmtTime, CUE_COLORS, clamp, keyColor, DECK_COLORS } from '../util.j
 import { TC } from './theme.js';
 import { btn, Fader } from './controls.js';
 import { WaveDetail, WaveOverview, isShown } from './waveform.js';
+import { PlatterGesture, WheelSteps } from './jog-gesture.js';
 import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES } from '../audio/deck.js';
 import { STEMS } from '../audio/stems.js';
 
@@ -242,27 +243,18 @@ export class DeckUI {
   }
 
   bindPlatter() {
-    const c = this.platter, d = this.deck;
-    let lastA = null, down = false;
-    const ang = (e) => { const r = c.getBoundingClientRect(); return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)); };
+    // gestos en ui/jog-gesture.js: zona muerta (un clic no mueve la pista) y giro por distancia, no por ángulo
+    const c = this.platter, g = new PlatterGesture(this.deck, this.app), steps = new WheelSteps();
+    const pt = (e) => { const r = c.getBoundingClientRect(); return { x: e.clientX, y: e.clientY, cx: r.left + r.width / 2, cy: r.top + r.height / 2, R: Math.max(20, r.width / 2) }; };
     c.addEventListener('pointerdown', (e) => {
-      if (!d.track) return;
-      down = true; lastA = ang(e); c.setPointerCapture(e.pointerId);
-      d.jogTouch(true);
+      if (!this.deck.track) return;
+      c.setPointerCapture(e.pointerId);
+      g.press(pt(e));
     });
-    c.addEventListener('pointermove', (e) => {
-      if (!down) return;
-      const a = ang(e);
-      let da = a - lastA;
-      if (da > Math.PI) da -= 2 * Math.PI;
-      if (da < -Math.PI) da += 2 * Math.PI;
-      lastA = a;
-      d.jogTurn((da / (2 * Math.PI)) * 605, 605);
-    });
-    const up = () => { if (!down) return; down = false; d.jogTouch(false); };
-    c.addEventListener('pointerup', up);
-    c.addEventListener('pointercancel', up);
-    c.addEventListener('wheel', (e) => { e.preventDefault(); d.jogTurn(-Math.sign(e.deltaY) * 12, 605); }, { passive: false });
+    c.addEventListener('pointermove', (e) => g.move(pt(e)));
+    c.addEventListener('pointerup', () => g.release());
+    c.addEventListener('pointercancel', () => g.release());
+    c.addEventListener('wheel', (e) => { e.preventDefault(); g.wheel(steps.push(e)); }, { passive: false });
   }
 
   async editBpm() {

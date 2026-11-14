@@ -3,8 +3,13 @@
 import { clamp, DECK_COLORS, DECK_LIGHT, CUE_COLORS } from '../util.js';
 import { tempoChanges } from '../audio/grid.js';
 import { TC } from './theme.js';
+import { WaveGesture } from './jog-gesture.js';
 
 const SEC_COLORS = { intro: CUE_COLORS[4], drop: '#ff3b47', break: '#a35bff', outro: '#ffa31a' };
+// Ajuste «Posición del cabezal»: fracción del ancho de la onda de detalle donde se dibuja lo que suena
+// (más a la izquierda = se ve más de lo que viene)
+export const PLAYHEAD_POS = { left: 0.25, third: 1 / 3, center: 0.5 };
+export const playheadFrac = (app) => PLAYHEAD_POS[app?.settings?.playheadPos] ?? PLAYHEAD_POS.left;
 // Colores de frecuencias (graves rojo, medios verde, agudos azul): se conservan en todos los temas
 // colores-ok: C_HIGH es el color de los agudos de la forma de onda
 const C_LOW = [235, 45, 40], C_MID = [60, 205, 70], C_HIGH = [45, 110, 255];
@@ -169,7 +174,8 @@ export class WaveDetail {
   setWave(w) { this.wave = w; if (w) colorize(w); this.dirty = true; }
   setZoom(z) { const v = clamp(z, 1.5, 40); if (v !== this.zoom) { this.zoom = v; this.dirty = true; } }
   bind() {
-    // Arrastrar la forma de onda = scratch / búsqueda
+    // Arrastrar la forma de onda = scratch / búsqueda (ui/jog-gesture.js: con zona muerta, un clic no mueve)
+    const g = new WaveGesture(this.deck, this.app);
     let lastX = 0, dragging = false;
     // YouTube: clic o arrastre sobre la barra de progreso = saltar a ese punto (seek del reproductor,
     // como mucho cada 120 ms mientras se arrastra)
@@ -185,21 +191,18 @@ export class WaveDetail {
       dragging = true; lastX = e.clientX;
       this.c.setPointerCapture(e.pointerId);
       if (this.deck.isYT) return ytSeek(e, true);
-      if (this.deck.playing) { this.deck.vinylTemp = this.deck.vinyl; this.deck.vinyl = true; this.deck.jogTouch(true); }
+      g.press(e.clientX);
     });
     this.c.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       if (this.deck.isYT) return ytSeek(e, false);
-      const dx = e.clientX - lastX; lastX = e.clientX;
-      const secPerPx = this.zoom / this.c.clientWidth;
-      if (this.deck.scratching) this.deck.scratchBySeconds(-dx * secPerPx);
-      else this.deck.seek(this.deck.time - dx * secPerPx);
+      g.move(e.clientX, this.zoom / (canvasSize(this.c).w || 1));
     });
     const up = (e) => {
       if (!dragging) return;
       dragging = false;
       if (this.deck.isYT) { if (e.type === 'pointerup' && e.clientX !== lastX) ytSeek(e, true); return; }
-      if (this.deck.scratching) { this.deck.jogTouch(false); if (this.deck.vinylTemp != null) { this.deck.vinyl = this.deck.vinylTemp; this.deck.vinylTemp = null; } }
+      g.release();
     };
     this.c.addEventListener('pointerup', up);
     this.c.addEventListener('pointercancel', up);
@@ -215,7 +218,8 @@ export class WaveDetail {
     const t = d.time;
     // sin cambios desde el último frame (deck parado, nada tocado): no se redibuja; el tema entra en la clave
     const blink = d.duration - t < 30 && d.playing ? Math.floor(performance.now() / 400) % 2 : 0;
-    const key = `${w}|${h}|${dpr}|${this.zoom}|${Math.round(t * (w / this.zoom) * dpr)}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
+    const ph = playheadFrac(this.app);
+    const key = `${w}|${h}|${dpr}|${this.zoom}|${ph}|${Math.round(t * (w / this.zoom) * dpr)}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
     if (!this.dirty && key === this.lastKey) return;
     this.dirty = false; this.lastKey = key;
     const { ctx } = fitCanvas(this.c);
@@ -229,7 +233,9 @@ export class WaveDetail {
     }
     if (d.isYT) return drawYouTube(ctx, w, h, d, true);
     const pxPerSec = w / this.zoom;
-    const t0 = t - (w / 2) / pxPerSec;
+    // cabezal en `phx` (ajuste «Posición del cabezal»): todo lo demás se coloca con xOf, relativo a él
+    const phx = Math.round(w * ph);
+    const t0 = t - phx / pxPerSec;
     const xOf = (tt) => (tt - t0) * pxPerSec;
 
     // forma de onda: mosaicos pre-dibujados (en la vista superior cada deck con su color identificativo;
@@ -244,7 +250,7 @@ export class WaveDetail {
         ctx.drawImage(tile, Math.round((i * TILE - X0) * dpr) / dpr, 0, TILE, h);
       }
       ctx.fillStyle = TC['wave-bg']; ctx.globalAlpha = 0.45;
-      ctx.fillRect(0, 0, Math.floor(w / 2), h);
+      ctx.fillRect(0, 0, phx, h);
       ctx.globalAlpha = 1;
     } else {
       ctx.fillStyle = TC['wave-text']; ctx.font = '12px Inter, sans-serif'; ctx.textAlign = 'center';
@@ -353,7 +359,7 @@ export class WaveDetail {
 
     // cabezal
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(Math.round(w / 2) - 1, 0, 2, h);
+    ctx.fillRect(phx - 1, 0, 2, h);
     ctx.fillStyle = DECK_COLORS[d.idx];
     ctx.fillRect(4, 4, 3, h - 8);
   }
