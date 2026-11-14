@@ -213,6 +213,8 @@ export class WaveDetail {
   }
   draw() {
     if (!visible(this.c)) return;
+    const diag = this.app.perfDiag;
+    if (diag) diag.waveSeen();
     const d = this.deck;
     const { w, h } = canvasSize(this.c), dpr = window.devicePixelRatio || 1;
     const t = d.time;
@@ -222,6 +224,7 @@ export class WaveDetail {
     const key = `${w}|${h}|${dpr}|${this.zoom}|${ph}|${Math.round(t * (w / this.zoom) * dpr)}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
     if (!this.dirty && key === this.lastKey) return;
     this.dirty = false; this.lastKey = key;
+    if (diag) diag.waveDrawn();
     const { ctx } = fitCanvas(this.c);
     ctx.fillStyle = TC['wave-bg'];
     ctx.fillRect(0, 0, w, h);

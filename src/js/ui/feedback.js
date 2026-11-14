@@ -2,8 +2,8 @@
 // - Registro: errores de JS no capturados, promesas rechazadas, console.error/warn (audio, MIDI, análisis,
 //   stems…) y avisos de la app van al registro local rotativo del proceso principal (<datos>\logs).
 // - «Enviar informe o sugerencia»: tipo, texto, email opcional y «Adjuntar registro técnico» (enseña antes
-//   exactamente qué se envía: versión, Windows, controladora, decks y las últimas 200 líneas del registro,
-//   sin rutas ni canciones). Lo envía el proceso principal a «feedbackUrl» de src/config/servicios.json;
+//   exactamente qué se envía: versión, Windows, controladora, decks, diagnóstico de rendimiento (ui/perf-diag.js
+//   y main.js → systemPerf) y las últimas 200 líneas del registro, sin rutas ni canciones). Lo envía el proceso principal a «feedbackUrl» de src/config/servicios.json;
 //   si está vacío o falla, abre el correo a contacto@nexuraia.com y guarda el informe en un .txt.
 import { el, toast } from '../util.js';
 import { select } from './controls.js';
@@ -46,7 +46,7 @@ export class Feedback {
   // Lo que la app sabe de la sesión (sin datos personales)
   context() {
     const a = this.app;
-    return { controller: a.midi?.controllerName || '', decks: a.deckCount === 4 ? 4 : 2 };
+    return { controller: a.midi?.controllerName || '', decks: a.deckCount === 4 ? 4 : 2, perf: a.perfDiag ? a.perfDiag.snapshot() : null };
   }
   // Títulos, artistas, nombres de archivo y de crates: se quitan del registro antes de enviarlo
   knownNames() {
@@ -64,6 +64,7 @@ export class Feedback {
 
   techText(t) {
     return [`Versión: ${t.version}`, `Sistema: ${t.os}`, `Controladora MIDI: ${t.controller}`, `Decks: ${t.decks}`,
+      ...(t.perfLines && t.perfLines.length ? ['Diagnóstico de rendimiento:', ...t.perfLines] : []),
       `Últimas ${t.log.length} líneas del registro:`, ...(t.log.length ? t.log : ['(vacío)'])].join('\n');
   }
 
@@ -85,7 +86,7 @@ export class Feedback {
     loadPreview();
     const box = el('div', { class: 'fb-attach-box' },
       el('label', { class: 'fb-check', for: 'fb-attach' }, attach, el('span', {}, 'Adjuntar registro técnico')),
-      el('p', { class: 'hint' }, 'Se adjunta exactamente lo que ves abajo: versión, Windows, controladora MIDI conectada y las últimas 200 líneas del registro de la app. Las rutas de archivos, los nombres de canciones, artistas y crates y los correos se sustituyen por <ruta>, <pista>, «…» o <email>.'),
+      el('p', { class: 'hint' }, 'Se adjunta exactamente lo que ves abajo: versión, Windows, controladora MIDI conectada, un diagnóstico de rendimiento (procesador, memoria, tarjeta gráfica, número de pistas, ajustes de rendimiento y fluidez de la forma de onda en los últimos minutos) y las últimas 200 líneas del registro de la app. Las rutas de archivos, los nombres de canciones, artistas y crates y los correos se sustituyen por <ruta>, <pista>, «…» o <email>.'),
       preview);
     attach.addEventListener('change', () => { preview.hidden = !attach.checked; });
     const body = el('div', { class: 'form fb-form' },

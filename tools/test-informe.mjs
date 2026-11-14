@@ -71,5 +71,23 @@ ok(report.windowsLabel('win32', '10.0.22631') === 'Windows 11' && report.windows
 const mail = report.mailtoUrl({ kind: 'error', text: 'Hola', email: '', file: 'C:\\x\\informe.txt' });
 ok(mail.startsWith('mailto:contacto@nexuraia.com?subject=') && mail.length < 2000, 'mailto a contacto@nexuraia.com y corto');
 
+console.log('Diagnóstico de rendimiento');
+const perf = {
+  system: { cpu: 'Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz', threads: 20, mhz: 2400, ramGB: 64, gpus: [{ vendor: 'AMD', device: '0x731f', driver: '31.0.24033.1003', active: true }], gpuStatus: { compositing: true, canvas2d: true, raster: true }, gpuSetting: 'auto', electron: '33.4.11', extra: 'C:\\Users\\Miguel\\secreto' },
+  app: { tracks: 3120, perfMode: true, fpsTarget: 30, layout: 'serato', windowMin: 5, fps: 29.6, fpsPlaying: 29.8, longTasks: 4, longMaxMs: 88.4, stalls: 1, stallMaxMs: 140, freezes: [{ minAgo: 2.5, ms: 2400, kind: 'gpu', gpu: true }], ruta: 'C:\\Users\\Miguel\\Music\\Titanium.mp3', titulo: 'Titanium' }
+};
+const tp = report.technical({ version: '1.0.0-rc.5', os: 'Windows 11', controller: '', decks: 2, log: [], known, user: 'Miguel', home, perf });
+const lines = report.perfText(tp.perf).join('\n');
+console.log(lines.split('\n').map(l => '     ' + l).join('\n'));
+ok(/Xeon\(R\) CPU E5-2640 v4.*20 hilos.*RAM 64 GB/.test(lines), 'procesador, hilos y RAM');
+ok(/AMD 0x731f \(controlador 31\.0\.24033\.1003\) activa/.test(lines) && /Aceleración por GPU: automática · composición sí · canvas sí/.test(lines), 'tarjeta gráfica, controlador y aceleración');
+ok(/Biblioteca: 3120 pistas · modo rendimiento sí \(objetivo 30 fps\)/.test(lines) && /onda 29\.6 fps.*tareas largas 4 \(máx\. 88\.4 ms\).*bloqueos de más de 100 ms 1/.test(lines), 'pistas, ajustes de rendimiento, fps y tareas largas');
+ok(/hace 2\.5 min, 2400 ms \(sin dibujar con el hilo libre, GPU activa\)/.test(lines), 'congelaciones detectadas por el vigilante');
+ok(!JSON.stringify(tp.perf).includes('Miguel') && !JSON.stringify(tp.perf).includes('Titanium') && !('ruta' in tp.perf) && !('extra' in tp.perf), 'solo los campos conocidos: sin rutas ni nombres');
+const p3 = report.buildPayload({ kind: 'error', text: 'Se congela la onda', email: '', attach: true, tech: tp, version: '1.0.0-rc.5' });
+ok(p3.technical.perf && /Procesador: /.test(p3.system) && /Diagnóstico de rendimiento/.test(report.reportText({ kind: 'error', text: 'x', email: '', tech: tp })), 'va en el JSON enviado, en «system» y en el .txt de respaldo');
+const p4 = report.buildPayload({ kind: 'error', text: 'x', email: '', attach: false, tech: tp, version: '1' });
+ok(!p4.technical && !p4.system, 'sin «Adjuntar registro técnico» tampoco va el diagnóstico');
+
 console.log(`\n${pass} correctas, ${fail} fallidas`);
 process.exit(fail ? 1 : 0);

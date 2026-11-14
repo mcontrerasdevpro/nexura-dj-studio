@@ -1,6 +1,6 @@
 // Controlador de deck: transporte, cue, hot cues, loops, roll, slicer, beat jump,
 // pitch play, slip, censor, sync, keylock, scratch y modo YouTube.
-import { Emitter, clamp, CUE_COLORS, camelotShift } from '../util.js';
+import { Emitter, clamp, CUE_COLORS, camelotShift, copyChannel } from '../util.js';
 import { YTSource } from '../youtube/youtube.js';
 import { STEMS, STEM_PRESETS } from './stems.js';
 import * as Grid from './grid.js';
@@ -134,7 +134,15 @@ export class Deck extends Emitter {
   }
 
   // ---------------------------------------------------------------- carga
-  async load(track, buffer) {
+  // Copias de los canales para el worklet hechas a trozos, sin parar la interfaz (app.loadToDeck las prepara
+  // antes de llamar a load; copiar de golpe una pista de 7 min paraba la onda unos 300 ms en un PC lento)
+  static async copyChannels(buffer) {
+    const L = await copyChannel(buffer.getChannelData(0));
+    const R = buffer.numberOfChannels > 1 ? await copyChannel(buffer.getChannelData(1)) : null;
+    return { L, R };
+  }
+  // copies: { L, R } de copyChannels (si no, se copian aquí de una vez)
+  async load(track, buffer, copies = null) {
     this.app.syncMgr?.beforeLoad(this);
     this.stopAll();
     this.unloadYT();
@@ -143,8 +151,8 @@ export class Deck extends Emitter {
     this.isYT = false;
     this.sr = buffer.sampleRate;
     this.duration = buffer.duration;
-    const L = buffer.getChannelData(0).slice();
-    const R = buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : null;
+    const L = copies ? copies.L : buffer.getChannelData(0).slice();
+    const R = copies ? copies.R : buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : null;
     // las copias se transfieren al worklet (sin una tercera copia de la pista en memoria)
     this.send({ t: 'load', L, R, sr: buffer.sampleRate }, R ? [L.buffer, R.buffer] : [L.buffer]);
     this.setConnected(true);

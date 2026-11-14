@@ -5,6 +5,7 @@ import { treeFromRelPaths } from './library/folder-crates.js';
 const N = window.nexura;
 export const isDesktop = !!(N && N.isDesktop);
 
+let audioUrl = ''; // /__audio/<token> del servidor local (escritorio), ver readFile
 const webFiles = new Map();
 const webWaves = new Map();
 const webLog = [];
@@ -89,19 +90,46 @@ function pickWebTree() {
 
 export const platform = {
   async info() {
-    if (N) return N.info();
+    if (N) { const i = await N.info(); audioUrl = i.audioUrl || ''; return i; }
     return { version: 'web', name: 'Nexura DJ Studio', platform: 'web', recordings: '(descargas)' };
   },
   async storeGet(name) {
     if (N) return N.storeGet(name);
     try { return JSON.parse(localStorage.getItem('nexura_' + name)); } catch (_) { return null; }
   },
+  // data: objeto o texto JSON ya preparado (la biblioteca). Al proceso principal se envía siempre como texto:
+  // pasar un objeto grande por el puente (contextBridge + IPC) cuesta muchísimo más que pasar su JSON
   async storeSet(name, data) {
-    if (N) return N.storeSet(name, data);
-    try { localStorage.setItem('nexura_' + name, JSON.stringify(data)); } catch (_) { /* cuota */ }
+    const text = typeof data === 'string' ? data : JSON.stringify(data);
+    if (N) return N.storeSet(name, text);
+    try { localStorage.setItem('nexura_' + name, text); } catch (_) { /* cuota */ }
     return true;
   },
+  // Analizador en segundo plano (escritorio; main.js → analysisWindow): lee, decodifica y analiza la pista en
+  // otro proceso → { result, duration }
+  analysis: {
+    available: !!(N && N.analyzeFile),
+    run(path, sr, opts) { if (!N || !N.analyzeFile) throw new Error('Solo en la app de escritorio'); return N.analyzeFile({ path, sr, opts }); }
+  },
+  // El proceso principal pide guardar lo pendiente antes de cerrar la ventana o reiniciar (main.js)
+  onFlush(fn) { if (N && N.onFlush) N.onFlush(fn); },
+  // Aceleración por GPU (Ajustes → Audio → Rendimiento): se aplica al reiniciar la app
+  gpu: {
+    available: !!(N && N.gpu),
+    get() { return N && N.gpu ? N.gpu.get() : Promise.resolve(null); },
+    set(v) { return N && N.gpu ? N.gpu.set(v) : Promise.resolve(null); },
+    relaunch() { return N && N.gpu ? N.gpu.relaunch() : Promise.resolve(false); }
+  },
+  // Archivo entero. Los de audio se leen por el servidor local de la app (main.js → serveAudio): llegan a
+  // trozos sin parar la interfaz; si falla, por IPC como antes
   async readFile(p) {
+    if (N && audioUrl && /\.(mp3|wav|flac|ogg|oga|opus|m4a|aac|mp4|webm)$/i.test(p)) {
+      try {
+        const r = await fetch(audioUrl + '?p=' + encodeURIComponent(p), { cache: 'no-store' });
+        if (r.ok) return new Uint8Array(await r.arrayBuffer());
+        if (r.status === 404) throw new Error('No se encuentra el archivo');
+      } catch (e) { if (/No se encuentra/.test(e.message)) throw e; }
+    }
     if (N) return N.readFile(p);
     const f = webFiles.get(p);
     if (!f) throw new Error('El archivo ya no está disponible en esta sesión del navegador');

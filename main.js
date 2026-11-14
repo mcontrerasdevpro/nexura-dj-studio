@@ -48,6 +48,15 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 // Pruebas (tools/ui-check-rc1-escritorio.cjs): datos en una carpeta temporal, sin tocar los del usuario
 if (process.env.NEXURA_USER_DATA) app.setPath('userData', process.env.NEXURA_USER_DATA);
 
+// Ajustes que se aplican al arrancar, antes de que exista la ventana (<datos de usuario>\arranque.json):
+// gpu: 'auto' | 'off' (Ajustes → Audio → Rendimiento → «Aceleración por GPU»). Con algunas tarjetas y
+// controladores (p. ej. AMD con canvas acelerado) la forma de onda puede quedarse congelada; sin aceleración
+// se dibuja con la CPU. Solo se puede cambiar antes de «ready»: hace falta reiniciar la app.
+const bootFile = () => path.join(app.getPath('userData'), 'arranque.json');
+const BOOT = readJsonFile(bootFile());
+const GPU_OFF = BOOT.gpu === 'off';
+if (GPU_OFF) app.disableHardwareAcceleration();
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
@@ -143,11 +152,27 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8'
 };
 
+// Lectura de archivos de audio para la interfaz por el servidor local (/__audio/<token>?p=<ruta>): pasar una pista
+// entera (60 MB en WAV) como respuesta de IPC paraba la interfaz casi 1 s en un PC lento; con fetch llega a trozos.
+// Solo con el token aleatorio de esta sesión (lo conoce la interfaz por app:info) y solo archivos de audio.
+const AUDIO_TOKEN = crypto.randomBytes(24).toString('hex');
+async function serveAudio(u, res) {
+  const p = u.searchParams.get('p') || '';
+  if (!path.isAbsolute(p) || !AUDIO_EXT.has(path.extname(p).toLowerCase())) { res.writeHead(403); return res.end(); }
+  let st;
+  try { st = await fsp.stat(p); } catch (_) { res.writeHead(404); return res.end(); }
+  if (!st.isFile()) { res.writeHead(404); return res.end(); }
+  res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store' });
+  fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
+}
+
 function startStaticServer() {
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       try {
-        const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+        const u = new URL(req.url, 'http://localhost');
+        if (u.pathname === '/__audio/' + AUDIO_TOKEN) return await serveAudio(u, res);
+        const urlPath = decodeURIComponent(u.pathname);
         let rel = urlPath === '/' ? '/index.html' : urlPath;
         const filePath = path.normalize(path.join(SRC_DIR, rel));
         if (!filePath.startsWith(SRC_DIR)) { res.writeHead(403); return res.end(); }
@@ -843,16 +868,124 @@ function gpuStatus() {
   } catch (_) { return null; }
 }
 
+// Escrituras de data/<nombre>.json en cola por archivo: dos guardados seguidos (p. ej. uno diferido y el de
+// cerrar la app) no se pisan el archivo temporal y siempre gana el último que ha llegado
+const storeQueue = new Map();
+function storeWrite(name, text) {
+  const file = path.join(dataDir(), name + '.json'), tmp = file + '.tmp';
+  const job = (storeQueue.get(name) || Promise.resolve()).catch(() => {}).then(async () => {
+    if (storeLocked) return false;
+    await fsp.writeFile(tmp, text);
+    await fsp.rename(tmp, file);
+    return true;
+  });
+  storeQueue.set(name, job);
+  job.finally(() => { if (storeQueue.get(name) === job) storeQueue.delete(name); }).catch(() => {});
+  return job;
+}
+const storeIdle = () => Promise.all([...storeQueue.values()].map(p => p.catch(() => {})));
+
+// Antes de cerrar la ventana (o reiniciar) se pide a la interfaz que guarde lo pendiente (biblioteca con
+// guardado diferido y ajustes) y se espera a que esté escrito en disco; como mucho `ms`
+let flushSeq = 0, closeFlushed = false;
+function flushRenderer(ms = 4000) {
+  const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+  if (!wc || wc.isCrashed()) return storeIdle();
+  const id = ++flushSeq;
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); ipcMain.removeListener('app:flushed', on); resolve(); };
+    const on = (_e, rid) => { if (rid === id) done(); };
+    const t = setTimeout(() => { log('WARN', 'main', 'La interfaz no ha confirmado el guardado al cerrar'); done(); }, ms);
+    ipcMain.on('app:flushed', on);
+    wc.send('app:flush', id);
+  }).then(storeIdle);
+}
+
+// Analizador en segundo plano: ventana oculta (src/analysis.html, su propio proceso) que lee, decodifica y analiza
+// las pistas del análisis por lotes sin pasar el audio por la interfaz. Se crea al primer trabajo y se cierra
+// tras 60 s sin trabajo. Si falla, la interfaz analiza como antes (app.analyzeOne).
+let anaWin = null, anaReady = null, anaSeq = 0, anaIdle = null;
+const anaJobs = new Map();
+function anaFailAll(msg) { for (const j of anaJobs.values()) j.reject(new Error(msg)); anaJobs.clear(); }
+function analysisWindow() {
+  if (anaWin && !anaWin.isDestroyed()) return anaReady;
+  const w = anaWin = new BrowserWindow({
+    show: false, width: 320, height: 200, title: APP_NAME + ' · análisis',
+    webPreferences: { preload: path.join(__dirname, 'main', 'analysis-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
+  });
+  w.webContents.on('render-process-gone', (_e, d) => { log('ERROR', 'analisis', `El analizador en segundo plano se ha cerrado (${d.reason})`); anaFailAll('El analizador se ha cerrado'); if (!w.isDestroyed()) w.destroy(); });
+  w.on('closed', () => { if (anaWin === w) anaWin = null; anaFailAll('El analizador se ha cerrado'); });
+  anaReady = w.loadURL(`http://localhost:${serverPort}/analysis.html`).then(() => w);
+  anaReady.catch(() => { if (!w.isDestroyed()) w.destroy(); });
+  return anaReady;
+}
+function registerAnalysisIpc() {
+  ipcMain.handle('analysis:run', async (_e, job) => {
+    clearTimeout(anaIdle);
+    const w = await analysisWindow();
+    const id = ++anaSeq;
+    try {
+      return await new Promise((resolve, reject) => {
+        anaJobs.set(id, { resolve, reject });
+        w.webContents.send('analysis:job', { id, path: String((job && job.path) || ''), url: `/__audio/${AUDIO_TOKEN}`, sr: Number(job && job.sr) || 48000, opts: (job && job.opts) || {} });
+      });
+    } finally {
+      if (!anaJobs.size) anaIdle = setTimeout(() => { if (anaWin && !anaWin.isDestroyed()) anaWin.destroy(); }, 60000);
+    }
+  });
+  ipcMain.on('analysis:done', (e, m) => {
+    if (!anaWin || anaWin.isDestroyed() || e.sender !== anaWin.webContents || !m) return;
+    const j = anaJobs.get(m.id);
+    if (!j) return;
+    anaJobs.delete(m.id);
+    if (m.ok) j.resolve({ result: m.result, duration: m.duration }); else j.reject(new Error(String(m.error || 'error')));
+  });
+}
+
+// Diagnóstico de rendimiento del equipo para el informe (sin datos personales: modelos y números)
+const GPU_VENDORS = { 0x1002: 'AMD', 0x1022: 'AMD', 0x10de: 'NVIDIA', 0x8086: 'Intel', 0x1414: 'Microsoft (software)', 0x5143: 'Qualcomm' };
+async function systemPerf() {
+  const cpus = os.cpus() || [];
+  let gpus = [];
+  try {
+    const g = await app.getGPUInfo('basic');
+    gpus = (g.gpuDevice || []).map(d => ({ vendor: GPU_VENDORS[d.vendorId] || '0x' + Number(d.vendorId || 0).toString(16), device: '0x' + Number(d.deviceId || 0).toString(16), driver: String(d.driverVersion || ''), active: !!d.active }));
+  } catch (_) { /* sin información */ }
+  return {
+    cpu: String((cpus[0] && cpus[0].model) || '').replace(/\s+/g, ' ').trim(), threads: cpus.length, mhz: (cpus[0] && cpus[0].speed) || 0,
+    ramGB: Math.round(os.totalmem() / 1073741824), gpus, gpuStatus: gpuStatus(), gpuSetting: GPU_OFF ? 'off' : 'auto', electron: process.versions.electron
+  };
+}
+
 function registerIpc() {
   registerStemsIpc();
+  registerAnalysisIpc();
   registerCleanupIpc();
   ipcMain.handle('app:info', () => ({
     os: `${os.type()} ${os.release()} (${os.arch()})`, electron: process.versions.electron,
     isBeta: /beta|alpha|rc/i.test(app.getVersion()), osLabel: OS_LABEL, store: !!process.windowsStore,
     services: { feedback: !!FEEDBACK_URL, stats: !!STATS_URL, search: !!SEARCH_URL }, updates: !!(updater && updater.status().state !== 'disabled'),
-    version: app.getVersion(), name: APP_NAME, platform: process.platform, gpu: gpuStatus(),
+    version: app.getVersion(), name: APP_NAME, platform: process.platform, gpu: gpuStatus(), gpuOff: GPU_OFF, audioUrl: `/__audio/${AUDIO_TOKEN}`,
     userData: app.getPath('userData'), recordings: recDir()
   }));
+
+  // ---- Aceleración por GPU: 'auto' | 'off' en arranque.json (se aplica al reiniciar)
+  const gpuState = () => ({ setting: readJsonFile(bootFile()).gpu === 'off' ? 'off' : 'auto', offNow: GPU_OFF, status: gpuStatus() });
+  ipcMain.handle('gpu:get', () => gpuState());
+  ipcMain.handle('gpu:set', async (_e, v) => {
+    const boot = { ...readJsonFile(bootFile()), gpu: v === 'off' ? 'off' : 'auto' };
+    await fsp.writeFile(bootFile(), JSON.stringify(boot, null, 2));
+    log('INFO', 'main', `Aceleración por GPU: ${boot.gpu === 'off' ? 'desactivada' : 'automática'} (al reiniciar)`);
+    return gpuState();
+  });
+  // Reiniciar ahora (tras cambiar la aceleración por GPU): guarda lo pendiente y vuelve a abrir la app
+  ipcMain.handle('app:relaunch', async () => {
+    await flushRenderer();
+    closeFlushed = true;
+    app.relaunch();
+    app.quit();
+    return true;
+  });
 
   ipcMain.handle('dialog:openFiles', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
@@ -998,13 +1131,12 @@ function registerIpc() {
     if (!/^[a-z0-9_-]+$/i.test(name)) return null;
     try { return JSON.parse(await fsp.readFile(path.join(dataDir(), name + '.json'), 'utf8')); } catch (_) { return null; }
   });
+  // data: texto JSON (lo normal: la interfaz ya lo prepara a trozos sin bloquearse) u objeto (versiones antiguas)
   ipcMain.handle('store:set', async (_e, name, data) => {
     if (!/^[a-z0-9_-]+$/i.test(name) || storeLocked) return false;
-    const file = path.join(dataDir(), name + '.json');
-    const tmp = file + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(data));
-    await fsp.rename(tmp, file);
-    return true;
+    const text = typeof data === 'string' ? data : JSON.stringify(data);
+    if (!/^\s*[[{]/.test(text)) return false;
+    return storeWrite(name, text);
   });
 
   ipcMain.handle('wave:get', async (_e, id) => {
@@ -1058,11 +1190,12 @@ function registerIpc() {
 
   // ---- Informe de errores y sugerencias (main/report.js)
   // info: { kind, text, email, attach, controller, decks, known: [títulos/artistas/archivos a ocultar] }
-  const techFor = (info) => report.technical({
+  const techFor = async (info) => report.technical({
     version: app.getVersion(), os: `${OS_LABEL} (${os.release()}, ${os.arch()})`, controller: info.controller, decks: info.decks,
-    log: logger ? logger.tail(report.LOG_LINES) : [], known: info.known, user: os.userInfo().username, home: os.homedir()
+    log: logger ? logger.tail(report.LOG_LINES) : [], known: info.known, user: os.userInfo().username, home: os.homedir(),
+    perf: { system: await systemPerf(), app: info.perf }
   });
-  ipcMain.handle('report:preview', (_e, info) => techFor(info || {}));
+  ipcMain.handle('report:preview', async (_e, info) => { const t = await techFor(info || {}); return { ...t, perfLines: report.perfText(t.perf) }; });
   ipcMain.handle('report:send', async (_e, info) => {
     info = info || {};
     // sugerencias que quedaron en cola en la beta: se envían tal cual (sin alternativa)
@@ -1071,7 +1204,7 @@ function registerIpc() {
       const r = await fetch(FEEDBACK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ app: APP_NAME, ...info.legacy }) }).catch(() => null);
       return { ok: !!(r && r.ok) };
     }
-    const tech = info.attach ? techFor(info) : null;
+    const tech = info.attach ? await techFor(info) : null;
     const payload = report.buildPayload({ kind: info.kind, text: info.text, email: info.email, attach: !!info.attach, tech, version: app.getVersion() });
     if (FEEDBACK_URL) {
       try {
@@ -1186,6 +1319,16 @@ async function createWindow() {
     }
   });
   Menu.setApplicationMenu(null);
+  // Cerrar: primero la interfaz guarda lo pendiente (biblioteca con guardado diferido, ajustes) y se espera a
+  // que esté en disco; después se cierra de verdad
+  const win = mainWindow;
+  // la ventana oculta de análisis no debe mantener la app abierta
+  win.on('closed', () => { if (anaWin && !anaWin.isDestroyed()) anaWin.destroy(); });
+  win.on('close', (e) => {
+    if (closeFlushed) return;
+    e.preventDefault();
+    flushRenderer().finally(() => { closeFlushed = true; if (!win.isDestroyed()) win.close(); });
+  });
   mainWindow.webContents.on('render-process-gone', (_e, d) => log('ERROR', 'main', `La interfaz se cerró inesperadamente (${d.reason}, código ${d.exitCode})`));
   mainWindow.webContents.on('unresponsive', () => log('WARN', 'main', 'La interfaz no responde'));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1196,6 +1339,7 @@ async function createWindow() {
     if (input.type === 'keyDown' && input.key === 'F12') mainWindow.webContents.toggleDevTools();
     if (input.type === 'keyDown' && input.key === 'F11') mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
+  closeFlushed = false;
   await mainWindow.loadURL(`http://localhost:${serverPort}/index.html`);
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
 }

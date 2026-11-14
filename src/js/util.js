@@ -53,6 +53,24 @@ export class Emitter {
   emit(ev, ...a) { for (const f of (this._h[ev] || []).slice()) { try { f(...a); } catch (e) { console.error(e); } } }
 }
 
+// Cede el hilo de la interfaz entre trozos de un trabajo largo (deja dibujar la onda y atender eventos).
+// scheduler.yield() continúa enseguida; setTimeout(0) se frena a 4 ms tras varios seguidos
+export function yieldToUI() {
+  const s = globalThis.scheduler;
+  return s && typeof s.yield === 'function' ? s.yield() : new Promise(r => setTimeout(r, 0));
+}
+
+// Copia un canal de audio a trozos (con yieldToUI entre trozo y trozo): copiar de golpe una pista de 7 min
+// paraba la interfaz unos 300 ms en un PC lento
+export async function copyChannel(src, chunk = 1 << 20) {
+  const out = new Float32Array(src.length);
+  for (let o = 0; o < src.length; o += chunk) {
+    out.set(src.subarray(o, o + chunk), o);
+    if (o + chunk < src.length) await yieldToUI();
+  }
+  return out;
+}
+
 export function debounce(fn, ms) {
   let t = 0;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };

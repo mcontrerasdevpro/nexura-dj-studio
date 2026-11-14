@@ -25,6 +25,13 @@ contextBridge.exposeInMainWorld('nexura', {
   artGet: (id, p) => ipcRenderer.invoke('art:get', id, p),
   storeGet: (name) => ipcRenderer.invoke('store:get', name),
   storeSet: (name, data) => ipcRenderer.invoke('store:set', name, data),
+  analyzeFile: (job) => plain(ipcRenderer.invoke('analysis:run', job)),
+  onFlush: (fn) => ipcRenderer.on('app:flush', async (_e, id) => { try { await fn(); } catch (_) { /* se cierra igualmente */ } ipcRenderer.send('app:flushed', id); }),
+  gpu: {
+    get: () => ipcRenderer.invoke('gpu:get'),
+    set: (v) => ipcRenderer.invoke('gpu:set', v),
+    relaunch: () => ipcRenderer.invoke('app:relaunch')
+  },
   waveGet: (id) => ipcRenderer.invoke('wave:get', id),
   waveSet: (id, data) => ipcRenderer.invoke('wave:set', id, data),
   saveRecording: (data, name) => ipcRenderer.invoke('rec:save', data, name),
