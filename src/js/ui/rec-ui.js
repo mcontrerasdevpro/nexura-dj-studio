@@ -1,6 +1,6 @@
 // Franja de grabación de la vista Biblioteca (se abre con REC de la barra superior). Usa la grabación de
 // siempre (engine.startRecording / app.toggleRecord): grabar o parar, nombre de la mezcla, carpeta donde se
-// guarda, nivel del master y tiempo grabado.
+// guarda (con «Cambiar…»), nivel del master y tiempo grabado.
 import { el, fmtTime } from '../util.js';
 import { btn } from './controls.js';
 import { peakToMeter } from '../audio/engine.js';
@@ -16,24 +16,37 @@ export class RecStripUI {
     this.name = el('input', { class: 'rec-name', type: 'text', maxlength: 60, spellcheck: 'false', placeholder: 'Nexura-set', value: app.settings.recName || '', 'aria-label': 'Nombre de la mezcla' });
     this.name.addEventListener('change', () => app.setSetting('recName', this.name.value.trim()));
     this.name.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') this.name.blur(); });
-    const dir = app.info?.recordings || '';
-    this.where = el('span', { class: 'rec-where', title: dir ? 'Las grabaciones se guardan en ' + dir + ' (WAV, con la fecha y la hora en el nombre)' : '' }, dir || '—');
-    this.openBtn = btn('Abrir carpeta', { cls: 'micro', title: 'Mostrar la última grabación (o la carpeta de grabaciones) en el explorador', onClick: () => app.platform.showItem(app.lastRecording || dir) });
-    this.openBtn.hidden = !isDesktop;
+    this.where = el('span', { class: 'rec-where' });
+    this.changeBtn = btn('Cambiar…', { cls: 'micro rec-change', title: 'Elegir la carpeta donde se guardan las grabaciones', onClick: () => app.chooseRecDir() });
+    this.openBtn = btn('Abrir carpeta', { cls: 'micro', title: 'Mostrar la última grabación (o la carpeta de grabaciones) en el explorador', onClick: () => app.platform.showItem(app.lastRecording || app.recFolder()) });
+    this.changeBtn.hidden = this.openBtn.hidden = !isDesktop;
     this.mL = el('i', { class: 'rec-lvl' }, el('b'));
     this.mR = el('i', { class: 'rec-lvl' }, el('b'));
     this.time = el('span', { class: 'rec-clock' }, '00:00');
     root.append(fold, el('span', { class: 'panel-title' }, 'GRABACIÓN'), this.recBtn,
       el('label', { class: 'rec-field' }, el('span', { class: 'lbl' }, 'MEZCLA'), this.name),
-      el('span', { class: 'rec-field rec-dir' }, el('span', { class: 'lbl' }, 'SE GUARDA EN'), this.where, this.openBtn),
+      el('span', { class: 'rec-field rec-dir' }, el('span', { class: 'lbl' }, 'SE GUARDA EN'), this.where, this.changeBtn, this.openBtn),
       el('span', { class: 'rec-field', title: 'Nivel del master (lo que se graba)' }, el('span', { class: 'lbl' }, 'NIVEL'), el('span', { class: 'rec-meters' }, this.mL, this.mR)),
       el('span', { class: 'rec-field' }, el('span', { class: 'lbl' }, 'TIEMPO'), this.time));
     app.engine.on('rec', () => this.refresh());
+    app.on('settings', (k) => { if (k === 'recDir') this.refreshDir(); });
+    this.refreshDir();
     this.refresh();
   }
 
   // nombre elegido (vacío = el de siempre); main.js quita los caracteres que no valen en un archivo
   mixName() { return (this.name.value || this.app.settings.recName || '').trim(); }
+
+  // Carpeta donde se guarda; si la elegida ya no existe o no admite escritura, se avisa en la propia franja
+  async refreshDir(check = true) {
+    if (check) await this.app.checkRecDir();
+    const dir = this.app.recFolder(), bad = this.app.recDirProblem;
+    this.where.textContent = dir || '—';
+    this.where.classList.toggle('warn', !!bad);
+    this.where.title = bad
+      ? `La carpeta elegida ${bad === 'missing' ? 'ya no existe' : 'no admite escritura'}: se grabará en la de siempre (${this.app.info?.recordings || ''}). Pulsa «Cambiar…»`
+      : dir ? `Las grabaciones se guardan en ${dir} (WAV, con la fecha y la hora en el nombre)` : '';
+  }
 
   refresh() {
     const on = !!this.app.engine.recording;
@@ -41,6 +54,7 @@ export class RecStripUI {
     this.recBtn.classList.toggle('on', on);
     this.root.classList.toggle('recording', on);
     if (!on) this.time.textContent = '00:00';
+    this.refreshDir(false);
   }
 
   // desde el bucle principal, solo con la franja visible

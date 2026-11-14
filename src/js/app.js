@@ -66,8 +66,16 @@ const DEFAULTS = {
   // biblioteca ocupa el resto); densidad de la tabla: auto (Compacta solo en la vista Biblioteca) | normal | compact
   screenView: 'mix', libDensity: 'auto',
   // franjas plegables (fx y rec solo en la vista Biblioteca; el sampler, en las dos)
-  panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
+  panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 },
+  // carpeta de grabación ('' = Música › Nexura DJ Studio › Grabaciones), campos del buscador (null = todos) y
+  // última carpeta abierta en el panel «Archivos»
+  recDir: '', searchFields: null, filesDir: ''
 };
+
+const countTracks = (n) => (n === 1 ? '1 pista' : `${n} pistas`);
+// Arranque: pasos que se vigilan (app.watchStep) y a partir de cuándo se anotan como lentos
+const STEP_WARN_MS = 5000;
+const STEP_NAMES = { settings: 'los ajustes', info: 'la información de la app', audio: 'el motor de audio', library: 'la biblioteca', outputs: 'las salidas de audio' };
 
 // ArrayBuffer con solo los bytes del archivo para decodeAudioData (que lo vacía): sin copiar si ya lo es (lo
 // normal con la lectura por fetch; copiar 60 MB en cada análisis cargaba la memoria y la recolección de basura)
@@ -89,22 +97,34 @@ class App extends Emitter {
     }), 800);
   }
 
+  // Arranque. Nada de lo que puede tardar sin control (MIDI, salidas de audio) se espera antes de enlazar el
+  // teclado y arrancar el bucle de dibujo: antes, si requestMIDIAccess no respondía (pasaba con la MC4000
+  // conectada), la interfaz se veía pero relojes, ondas y vúmetros se quedaban quietos y el teclado no iba.
+  // Lo que sí hay que esperar (ajustes, biblioteca, audio) se vigila: si tarda más de 5 s se anota en el
+  // registro técnico y en el diagnóstico de rendimiento (this.startup → perf-diag → informe)
   async start() {
-    const saved = await platform.storeGet('settings');
+    this.startup = { t0: performance.now(), slow: [], midi: 'init', midiMs: null, midiTimeouts: 0, outputs: 'init' };
+    const pending = [];   // avisos de antes de que exista el registro (ajustes e información de la app)
+    const saved = await this.watchStep('settings', platform.storeGet('settings'), pending);
     if (saved) this.settings = { ...DEFAULTS, ...saved, panels: { ...DEFAULTS.panels, ...(saved.panels || {}) } };
     this.settings.expansions = { ...DEFAULTS.expansions, ...(this.settings.expansions || {}) };
     this.settings.autoplay = autoplayOptions(this.settings.autoplay);
     this.settings.theme = applyTheme(this.settings.theme);
-    this.info = await platform.info();
+    // información de la app: si no llega en 5 s se sigue con lo mínimo y se completa cuando llegue
+    const infoP = platform.info();
+    const info = await Promise.race([infoP, new Promise(r => setTimeout(() => r(null), STEP_WARN_MS))]);
+    this.info = info || { version: '', name: 'Nexura DJ Studio', recordings: '' };
+    if (!info) { pending.push('info'); this.startup.slow.push({ step: 'info', ms: STEP_WARN_MS, done: false }); infoP.then(i => { if (i) Object.assign(this.info, i); }).catch(() => {}); }
     this.feedback = new Feedback(this);
     this.perfDiag = new PerfDiag(this);
     this.feedback.log('INFO', 'app', `Inicio de la interfaz · ${this.info.version} · ${navigator.language} · ${innerWidth}×${innerHeight} @${devicePixelRatio}`);
+    for (const s of pending) this.feedback.log('WARN', 'arranque', `El arranque ha esperado más de ${STEP_WARN_MS / 1000} s a ${STEP_NAMES[s] || s}`);
     this.legal = new LegalUI(this);
     this.notes = new ReleaseNotes(this);
     this.welcome = new Welcome(this);
     document.title = 'Nexura DJ Studio' + (this.info.isBeta ? ` ${this.info.version}` : '');
 
-    this.engine = await new AudioEngine().init({ latency: this.settings.latency });
+    this.engine = await this.watchStep('audio', new AudioEngine().init({ latency: this.settings.latency }));
     this.feedback.log('INFO', 'audio', `AudioContext ${this.engine.ctx.state} · ${this.engine.ctx.sampleRate} Hz · ${this.engine.ctx.destination.maxChannelCount} canales`);
     this.engine.ctx.addEventListener('statechange', () => this.feedback.log(this.engine.ctx.state === 'running' ? 'INFO' : 'WARN', 'audio', 'AudioContext ' + this.engine.ctx.state));
     this.engine.setXfCurve(this.settings.xfCurve);
@@ -113,7 +133,8 @@ class App extends Emitter {
     this.library.protected = !!this.settings.protectLibrary;
     this.library.subTracks = this.settings.crateSubTracks !== false;
     this.library.on('protected', (msg) => toast(msg, 'warn', 4500));
-    await this.library.load();
+    // la biblioteca sí se espera siempre (seguir sin ella y guardar encima la dejaría vacía)
+    await this.watchStep('library', this.library.load());
     this.ai = new Assistant(this);
     this.youtube = new YouTubeService(() => this.settings);
     this.spotify = new SpotifyService(() => this.settings);
@@ -142,14 +163,22 @@ class App extends Emitter {
       this.feedback.log('INFO', 'midi', `Dispositivos: ${this.midi.connectedNames.join(', ') || 'ninguno'} · controladora: ${this.midi.controllerName || 'ninguna'}`);
     });
     this.midi.on('profile', () => this.updateDeckMode());
-    await this.midi.init();
+    this.midi.on('status', (s, prev) => this.onMidiStatus(s, prev));
+    // teclado y bucle de dibujo, ya: no dependen de MIDI ni de las salidas de audio
+    this.bindKeyboard();
+    requestAnimationFrame(() => this.frame());
+    // MIDI en paralelo, con tiempo máximo (midi.js); si no responde, aviso con «Reintentar»
+    this.midiReady = this.midi.init().catch(e => { console.error('midi', e); this.feedback.log('ERROR', 'midi', 'No se pudo iniciar MIDI: ' + ((e && e.message) || e)); });
     this.stems.refreshStatus().then(() => this.stems.syncBackground()).catch(e => console.warn('stems', e));
     this.library.on('change', () => this.stems.syncBackground());
     this.decks.forEach(d => d.on('track', () => this.stems.syncBackground()));
     this.updateDeckMode();
     setInterval(() => { if (this.pendingDeckMode) this.updateDeckMode(); }, 1000);
-    await this.applyOutputs(true);
-    this.bindKeyboard();
+    // salidas de audio: tampoco bloquean (elegir un dispositivo puede tardar si el controlador no responde)
+    this.outputsReady = this.watchStep('outputs', this.applyOutputs(true)).then(() => { this.startup.outputs = 'ok'; }, (e) => {
+      this.startup.outputs = 'error';
+      this.feedback.log('ERROR', 'audio', 'No se pudieron aplicar las salidas de audio: ' + ((e && e.message) || e));
+    });
     this.engine.on('mixer', () => this.saveMixerSoon());
     this.engine.on('xf', () => this.saveMixerSoon());
     this.engine.on('rec', () => this.updateStatus());
@@ -163,7 +192,7 @@ class App extends Emitter {
     setTimeout(() => { if (this.welcome.shouldShow()) this.welcome.open(); this.notes.check(); this.feedback.flushQueue(); }, 600);
     this.updatesUI = new UpdatesUI(this);
     this.statsTimer = setTimeout(() => this.sendStatsSoon(), 20000);
-    requestAnimationFrame(() => this.frame());
+    this.checkRecDir().then(() => this.recStrip?.refreshDir(false));
     // sync: maestro y corrección continua de tempo y fase (independiente del dibujo)
     setInterval(() => { try { this.syncMgr.tick(); } catch (e) { console.error('sync', e); } }, SYNC_TICK_MS);
     setInterval(() => this.automix.tick().catch(e => console.error('automix', e)), 100);
@@ -175,6 +204,58 @@ class App extends Emitter {
     platform.onFlush(this.flushAll);
     window.addEventListener('beforeunload', () => { this.library.flush(); platform.storeSet('settings', this.settings); });
   }
+
+  // Espera un paso del arranque y, si pasa de 5 s, lo anota (registro técnico y diagnóstico de rendimiento).
+  // pending: si todavía no existe el registro, el aviso se guarda ahí y se escribe en cuanto exista
+  async watchStep(step, promise, pending = null) {
+    const t0 = performance.now();
+    let entry = null;
+    const timer = setTimeout(() => {
+      entry = { step, ms: STEP_WARN_MS, done: false };
+      this.startup.slow.push(entry);
+      if (this.feedback) this.feedback.log('WARN', 'arranque', `El arranque lleva más de ${STEP_WARN_MS / 1000} s esperando a ${STEP_NAMES[step] || step}`);
+      else if (pending) pending.push(step);
+    }, STEP_WARN_MS);
+    try { return await promise; }
+    finally {
+      clearTimeout(timer);
+      if (entry) {
+        entry.ms = Math.round(performance.now() - t0); entry.done = true;
+        this.feedback?.log('INFO', 'arranque', `${STEP_NAMES[step] || step}: listo tras ${(entry.ms / 1000).toFixed(1)} s`);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ MIDI: aviso si la controladora no responde
+  onMidiStatus(s, prev) {
+    const m = this.midi, st = this.startup;
+    st.midi = s; st.midiMs = m.waitMs; st.midiTimeouts = m.timeouts;
+    if (s === 'timeout' && prev !== 'timeout') {
+      this.feedback.log('WARN', 'midi', `requestMIDIAccess no ha respondido en ${MidiManager.INIT_TIMEOUT_MS / 1000} s: la app sigue sin controladora y lo reintenta (intento ${m.timeouts})`);
+      this.showMidiNotice();
+    } else if (s === 'ok') {
+      if (prev === 'timeout') { this.feedback.log('INFO', 'midi', `MIDI ha respondido tarde (${((m.waitMs || 0) / 1000).toFixed(1)} s): controladora disponible`); toast('Controladora MIDI disponible', 'ok'); }
+      else this.feedback.log('INFO', 'midi', `MIDI listo en ${m.waitMs} ms`);
+      this.hideMidiNotice();
+    } else if (s === 'denied') {
+      this.feedback.log('WARN', 'midi', 'Acceso MIDI denegado');
+      this.hideMidiNotice();
+    }
+    this.updateStatus();
+  }
+  showMidiNotice() {
+    if (this.midiNotice) { this.midiNotice.hidden = false; return; }
+    const retry = btn('Reintentar', { cls: 'micro primary midi-retry', onClick: () => {
+      retry.disabled = true; retry.textContent = 'Reintentando…';
+      this.feedback.log('INFO', 'midi', 'Reintentar MIDI (botón del aviso)');
+      this.midi.retry().finally(() => { retry.disabled = false; retry.textContent = 'Reintentar'; });
+    } });
+    const close = btn('✕', { cls: 'micro', title: 'Ocultar el aviso (se sigue reintentando)', onClick: () => { this.midiNotice.hidden = true; } });
+    close.setAttribute('aria-label', 'Ocultar el aviso');
+    this.midiNotice = el('div', { class: 'midi-notice', role: 'status' }, el('span', {}, 'La controladora no responde; reconéctala o pulsa Reintentar'), retry, close);
+    document.body.appendChild(this.midiNotice);
+  }
+  hideMidiNotice() { if (this.midiNotice) { this.midiNotice.remove(); this.midiNotice = null; } }
 
   // Contador anónimo (main/stats.js): solo si el usuario lo ha permitido y hay statsUrl; una vez al día
   sendStatsSoon() {
@@ -437,8 +518,11 @@ class App extends Emitter {
   updateStatus() {
     if (!this.midiStatus) return;
     const name = this.midi ? this.midi.controllerName : '';
-    this.midiStatus.textContent = name ? '🎛 ' + name : (this.midi && this.midi.status === 'unsupported' ? 'MIDI no disponible' : 'Sin controlador');
+    const ms = this.midi ? this.midi.status : '';
+    this.midiStatus.textContent = name ? '🎛 ' + name : ms === 'unsupported' ? 'MIDI no disponible' : ms === 'timeout' ? 'MIDI no responde' : ms === 'waiting' || ms === 'init' ? 'MIDI…' : 'Sin controlador';
     this.midiStatus.classList.toggle('ok', !!name);
+    this.midiStatus.classList.toggle('warn', !name && ms === 'timeout');
+    this.midiStatus.title = !name && ms === 'timeout' ? 'La controladora no responde: reconéctala o pulsa «Reintentar» en el aviso (se reintenta solo cada 20 s)' : 'Ajustes → MIDI';
     const mode = this.engine.outputMode;
     this.outStatus.textContent = mode === '4ch' ? '🔊 4 CH' : mode === 'separate' ? '🔊 2 SALIDAS' : mode === 'external' ? '🔊 MESA EXTERNA' : '🔊 ESTÉREO';
     this.outStatus.title = this.outputDesc || '';
@@ -570,8 +654,32 @@ class App extends Emitter {
     return buf;
   }
 
+  // Archivo del disco (panel «Archivos»): si está en la biblioteca, se carga esa pista; si no, se carga como pista
+  // suelta, sin añadirla (library.looseTrack)
+  async loadFileToDeck(p, idx) {
+    let t = this.library.byPath(p);
+    if (!t) {
+      const [info] = await platform.infoForPaths([p]);
+      if (!info) { toast('No se pudo abrir el archivo: ' + p, 'error', 6000); return; }
+      t = this.library.looseTrack(info);
+    }
+    return this.loadToDeck(t.id, idx);
+  }
+  // Rutas de archivos (o carpetas) → a la biblioteca (y a la crate, si se indica). Devuelve las pistas
+  async addPaths(paths, crateId = null) {
+    const infos = await platform.infoForPaths(paths);
+    if (!infos.length) { toast('No se encontraron archivos de audio compatibles', 'warn'); return []; }
+    const before = new Set(this.library.tracks.keys());
+    const added = this.library.addFiles(infos, crateId);
+    const fresh = added.filter(t => !before.has(t.id));
+    toast(`${countTracks(added.length)} ${crateId ? `en «${this.libraryUI.crateLabel(this.library.crate(crateId))}»` : 'en la biblioteca'}${fresh.length && fresh.length < added.length ? ` (${fresh.length} nuevas)` : ''}`, 'ok');
+    const todo = fresh.filter(t => !t.analyzed);
+    if (todo.length && this.settings.autoAnalyze) this.analyzeMany(todo);
+    return added;
+  }
+
   async loadToDeck(id, idx) {
-    const t = this.library.get(id);
+    const t = this.library.getAny(id);
     const d = this.decks[idx];
     if (!t || !d) return;
     this.focusDeck(idx);
@@ -595,7 +703,7 @@ class App extends Emitter {
     catch (e) {
       const lost = (await platform.existsMany([t.path]))?.[0] === false;
       if (lost) this.libraryUI.markMissing(t.id, true);
-      this.feedback.log('WARN', 'audio', `No se pudo cargar en el deck ${idx + 1}: ${lost ? 'archivo perdido' : (e && e.message) || e} · ${t.path}`);
+      this.feedback.log('WARN', 'audio', `No se pudo cargar en el deck ${idx + 1}: ${lost ? 'archivo perdido' : (e && e.message) || e}${t.external ? ' (archivo del panel Archivos)' : ' · ' + t.path}`);
       toast(lost ? `Archivo perdido: ${t.path}. Clic derecho → «Relocalizar archivos perdidos…»` : `No se pudo abrir el archivo: ${t.path}`, 'error', 7000);
       return;
     }
@@ -985,13 +1093,44 @@ class App extends Emitter {
       // nombre de la mezcla (franja de grabación) + fecha y hora, para no sobrescribir una grabación anterior
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const name = (this.recStrip?.mixName() || 'Nexura-set') + '-' + stamp;
-      const file = await platform.saveRecording(wav, name);
-      toast('Grabación guardada: ' + file, 'ok', 7000);
+      const { file, fallback } = await platform.saveRecording(wav, name, this.settings.recDir || '');
+      if (fallback) {
+        toast(`La carpeta de grabación elegida ${fallback === 'missing' ? 'ya no existe' : 'no admite escritura'}: la grabación se ha guardado en la de siempre (${file}). Cámbiala con «Cambiar…».`, 'warn', 12000,
+          { label: 'Cambiar…', fn: () => this.chooseRecDir() });
+        this.recDirProblem = fallback;
+      } else toast('Grabación guardada: ' + file, 'ok', 7000);
       this.lastRecording = file;
       if (isDesktop) platform.showItem(file);
     }
     this.updateStatus();
     this.recStrip?.refresh();
+  }
+  // Carpeta de grabación: la elegida (settings.recDir) o la de siempre (Música › Nexura DJ Studio › Grabaciones)
+  recFolder() { return this.settings.recDir || this.info.recordings || ''; }
+  async chooseRecDir() {
+    if (!platform.recDir.available) return toast('Cambiar la carpeta de grabación solo está disponible en la app de escritorio', 'warn');
+    const p = await platform.recDir.pick(this.recFolder());
+    if (!p) return;
+    const ck = await platform.recDir.check(p);
+    if (!ck.ok) return toast(ck.reason === 'missing' ? 'Esa carpeta no existe' : 'No se puede escribir en esa carpeta: elige otra', 'warn', 6000);
+    this.recDirProblem = '';
+    this.setSetting('recDir', p);
+    this.feedback.log('INFO', 'grabacion', 'Carpeta de grabación cambiada (carpeta elegida por el usuario)');
+    toast('Las grabaciones se guardarán en ' + p, 'ok', 5000);
+  }
+  resetRecDir() {
+    this.recDirProblem = '';
+    this.setSetting('recDir', '');
+    toast('Las grabaciones se guardarán en la carpeta de siempre', 'ok');
+  }
+  // Al arrancar y al abrir la franja o los Ajustes: si la carpeta elegida ya no sirve, se avisa (y se graba en la
+  // de siempre hasta que se cambie)
+  async checkRecDir() {
+    const d = this.settings.recDir;
+    if (!d || !platform.recDir.available) { this.recDirProblem = ''; return true; }
+    const ck = await platform.recDir.check(d);
+    this.recDirProblem = ck.ok ? '' : ck.reason;
+    return ck.ok;
   }
 
   // ------------------------------------------------------------------ IA

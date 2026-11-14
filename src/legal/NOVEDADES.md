@@ -14,6 +14,22 @@
 - Nuevo ajuste **«Densidad de la biblioteca»** en **Ajustes → Biblioteca**: **Normal** (la de siempre), **Compacta** (filas finas de 23 px y letra de 13 px) o **Automática**, que usa la Compacta en la vista Biblioteca y la Normal en la vista Mezcla.
 - Con la densidad Compacta, el **árbol de crates también se aprieta**: filas finas, iconos pequeños y subcrates sangrados, para ver muchas más crates sin hacer scroll.
 
+### Arranque sin esperar a la controladora
+- Arreglado: a veces, con la controladora conectada, la app arrancaba pero **la forma de onda, los relojes y los vúmetros se quedaban quietos** aunque la música sonara, y el teclado no respondía. Pasaba cuando Windows tardaba en contestar por la controladora y la app se quedaba esperándolo.
+- Ahora la app **arranca siempre sin esperar a la controladora**. Si no responde en 5 segundos, verás un aviso discreto, **«La controladora no responde; reconéctala o pulsa Reintentar»**, con su botón **Reintentar**. La app lo sigue intentando sola y, en cuanto responde, la controladora funciona.
+
+### Panel Archivos
+- Nuevo acceso **Archivos** junto a Todas, Prepare, Historial y Explorar (y en el árbol de la biblioteca, también en la vista Mezcla): navega por **Música, Documentos y todas las unidades** del equipo (con su nombre) en columnas. Al pulsar una carpeta se abre la siguiente columna y **su música sale en la lista**.
+- Las canciones que ya tienes en la biblioteca salen con sus datos; las demás, **más apagadas** y con el título, el artista, el BPM y la duración de sus etiquetas.
+- **Arrástralas a un deck** para pincharlas **sin añadirlas** a la biblioteca, o **a una crate o a Prepare** para añadirlas. Con **«Añadir esta carpeta a la biblioteca»** importas la carpeta entera, como con «Añadir música».
+- La app **recuerda la última carpeta** que abriste. No muestra las carpetas del sistema ni las ocultas.
+
+### Buscar solo donde quieres
+- Junto al buscador, un **icono con casillas** para elegir en qué buscar: **título, artista, álbum, género, comentario, BPM, tonalidad y año**. Por defecto, en todos. Si desmarcas alguno, el icono se marca para que lo sepas. Se recuerda.
+
+### Elige dónde se guardan tus grabaciones
+- Botón **«Cambiar…»** en la franja de grabación y en **Ajustes → Audio → Grabación**. Si esa carpeta deja de existir (por ejemplo, un disco desconectado), la grabación **no se pierde**: se guarda en la de siempre (Música › Nexura DJ Studio › Grabaciones) y te avisa.
+
 ## 1.0.0-rc.5 · noviembre de 2026
 
 ### Ves más de lo que viene

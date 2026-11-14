@@ -153,8 +153,23 @@ export class SettingsUI {
       this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps regulares (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
       ...this.gpuRows(gpu, gpuOn, gpuText),
       el('h3', {}, 'Grabación'),
-      el('p', { class: 'hint' }, `Las grabaciones (WAV) se guardan en: ${app.info.recordings}`),
+      ...this.recDirRows(),
       btn('Probar salida (tono 1 s)', { cls: 'small', onClick: () => this.testTone() })].filter(Boolean));
+  }
+  // Carpeta de grabación: la de siempre o la elegida con «Cambiar…» (también en la franja de grabación)
+  recDirRows() {
+    const app = this.app, custom = !!app.settings.recDir, bad = app.recDirProblem;
+    const where = el('span', { class: 'set-path rec-dir-path' + (bad ? ' warn' : '') }, app.recFolder() || '—');
+    const box = el('div', { class: 'set-inline' }, where);
+    if (platform.recDir.available) {
+      box.append(btn('Cambiar…', { cls: 'small rec-dir-change', onClick: async () => { await app.chooseRecDir(); this.render(); } }));
+      if (custom) box.append(btn('Usar la de siempre', { cls: 'small', onClick: () => { app.resetRecDir(); this.render(); } }));
+    }
+    const hint = bad ? `La carpeta elegida ${bad === 'missing' ? 'ya no existe' : 'no admite escritura'}: mientras no la cambies, se graba en la de siempre (${app.info.recordings})`
+      : custom ? `La de siempre: ${app.info.recordings}` : 'WAV, con el nombre de la mezcla y la fecha y la hora';
+    // si la carpeta elegida ha dejado de servir desde que se abrió la ventana, se vuelve a pintar con el aviso
+    if (custom && platform.recDir.available) app.checkRecDir().then(() => { if (this.body && this.tab === 'audio' && (app.recDirProblem || '') !== (bad || '')) this.render(); });
+    return [this.row('Carpeta de las grabaciones', box, hint)];
   }
   // «Aceleración por GPU»: Automática / Desactivada. Se guarda en arranque.json (main.js) y se aplica al
   // reiniciar la app; mientras tanto se avisa y se ofrece «Reiniciar ahora»
@@ -347,7 +362,9 @@ export class SettingsUI {
         `sin configurar${detected ? ` · familia ${detected.name}` : ''} — usa «Añadir controladora»`;
       return el('li', { class: n || d.native ? 'ok' : '' }, el('b', {}, d.name), ' — ' + txt);
     }) : [];
-    if (!devs.length) devs.push(el('li', {}, m.status === 'unsupported' ? 'Web MIDI no disponible' : 'No hay dispositivos MIDI conectados. Conecta la controladora por USB.'));
+    if (!devs.length && m.status === 'timeout') devs.push(el('li', { class: 'warn' }, 'La controladora no responde (Windows no contesta al pedir el acceso MIDI). Reconéctala o pulsa ',
+      btn('Reintentar', { cls: 'micro', onClick: () => m.retry().then(() => this.render()) }), '. La app lo reintenta sola cada 20 s.'));
+    if (!devs.length) devs.push(el('li', {}, m.status === 'unsupported' ? 'Web MIDI no disponible' : m.status === 'waiting' ? 'Esperando respuesta de MIDI…' : 'No hay dispositivos MIDI conectados. Conecta la controladora por USB.'));
 
     const monitor = el('div', { class: 'midi-monitor' });
     const renderMon = () => {

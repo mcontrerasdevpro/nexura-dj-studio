@@ -221,19 +221,69 @@ export class MidiManager extends Emitter {
     this.monitor = [];
     this.padModeHeld = [false, false];
     this.lastLed = 0;
+    this.timeouts = 0;           // veces que requestMIDIAccess no ha respondido a tiempo (diagnóstico)
+    this.waitMs = null;          // lo que tardó en responder (diagnóstico)
+  }
+  static INIT_TIMEOUT_MS = 5000;
+  static RETRY_MS = 20000;
+
+  // Con algunas controladoras (p. ej. la MC4000 recién conectada o abierta en otro programa) el navegador
+  // puede tardar mucho en responder a requestMIDIAccess, o no responder nunca. El arranque de la app no espera
+  // a MIDI (app.start) y aquí se espera como mucho INIT_TIMEOUT_MS: después status = 'timeout' (evento
+  // 'status'; la app avisa con «Reintentar») y se sigue intentando cada RETRY_MS. Si la respuesta llega tarde se
+  // acepta igual. Estados: init → waiting → ok | denied | unsupported | timeout
+  async init() {
+    // los perfiles JSON no deben retrasar la conexión: si llegan después, se vuelve a mirar los dispositivos
+    this.catalogReady = this.catalog.load().catch(e => console.warn('No se pudieron cargar perfiles MIDI JSON', e));
+    this.catalogReady.then(() => { if (this.access) this.scan(); });
+    this.timeouts = 0;
+    return this.connect();
   }
 
-  async init() {
-    try { await this.catalog.load(); }
-    catch (e) { console.warn('No se pudieron cargar perfiles MIDI JSON', e); }
-    if (!navigator.requestMIDIAccess) { this.status = 'unsupported'; this.emit('devices'); return; }
-    try { this.access = await navigator.requestMIDIAccess({ sysex: true }); }
-    catch (_) {
-      try { this.access = await navigator.requestMIDIAccess({ sysex: false }); }
-      catch (e) { this.status = 'denied'; this.emit('devices'); return; }
-    }
-    this.status = 'ok';
+  // Un intento de conexión: resuelve con el estado cuando responde el navegador o al pasar el tiempo máximo
+  connect() {
+    if (!navigator.requestMIDIAccess) { this.setStatus('unsupported'); this.emit('devices'); return Promise.resolve(this.status); }
+    if (this.access) return Promise.resolve(this.status);
+    const t0 = performance.now();
+    this.lastTry = Date.now();
+    if (this.status !== 'timeout') this.setStatus('waiting');
+    const req = (async () => {
+      try { return await navigator.requestMIDIAccess({ sysex: true }); }
+      catch (_) { return navigator.requestMIDIAccess({ sysex: false }); }
+    })();
+    const answered = req.then((access) => { this.onAccess(access, t0); return true; }, () => {
+      if (!this.access) { this.waitMs = Math.round(performance.now() - t0); this.setStatus('denied'); this.emit('devices'); }
+      return true;
+    });
+    return Promise.race([answered, new Promise(r => setTimeout(() => r(false), MidiManager.INIT_TIMEOUT_MS))]).then((ok) => {
+      if (!ok && !this.access && this.status !== 'denied') {
+        this.timeouts++;
+        this.setStatus('timeout');
+        this.emit('devices');
+        this.scheduleRetry();
+      }
+      return this.status;
+    });
+  }
+  // Reintentar (botón del aviso o automático): un intento nuevo; el anterior sigue valiendo si responde
+  retry() { clearTimeout(this.retryTimer); return this.connect(); }
+  scheduleRetry() {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => { if (!this.access && this.status === 'timeout') this.connect(); }, MidiManager.RETRY_MS);
+  }
+  setStatus(s) {
+    if (this.status === s) return;
+    const prev = this.status;
+    this.status = s;
+    this.emit('status', s, prev);
+  }
+  onAccess(access, t0) {
+    if (this.access) return; // ya respondió otro intento
+    clearTimeout(this.retryTimer);
+    this.access = access;
+    this.waitMs = Math.round(performance.now() - t0);
     this.access.onstatechange = () => this.scan();
+    this.setStatus('ok');
     this.scan();
   }
 

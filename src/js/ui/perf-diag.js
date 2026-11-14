@@ -80,7 +80,11 @@ export class PerfDiag {
     const ms = sum('ms'), playMs = sum('playMs');
     const open = this.open ? [{ at: Date.now(), ms: Math.round(performance.now() - this.open.start), kind: this.open.kind, gpu: this.open.gpu }] : [];
     const s = this.app.settings || {};
+    // arranque: estado de MIDI (y cuánto tardó o cuántas veces no respondió) y pasos que tardaron más de 5 s
+    const st = this.app.startup || {};
+    const startup = { midi: st.midi || '', midiMs: st.midiMs ?? null, midiTimeouts: st.midiTimeouts || 0, outputs: st.outputs || '', slow: (st.slow || []).map(x => ({ step: x.step, ms: x.ms, done: !!x.done })) };
     return {
+      startup,
       tracks: this.app.library ? this.app.library.tracks.size : 0, perfMode: !!s.perfMode, fpsTarget: s.perfMode ? 30 : 60, layout: this.app.waveLayout || '',
       windowMin: Math.round(ms / 6000) / 10, fps: ms ? Math.round(sum('draws') / (ms / 1000) * 10) / 10 : 0, fpsPlaying: playMs ? Math.round(sum('playDraws') / (playMs / 1000) * 10) / 10 : 0,
       longTasks: sum('longN'), longMaxMs: Math.round(max('longMax')), stalls: sum('stallN'), stallMaxMs: Math.round(max('stallMax')),

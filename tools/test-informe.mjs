@@ -88,6 +88,14 @@ const p3 = report.buildPayload({ kind: 'error', text: 'Se congela la onda', emai
 ok(p3.technical.perf && /Procesador: /.test(p3.system) && /Diagnóstico de rendimiento/.test(report.reportText({ kind: 'error', text: 'x', email: '', tech: tp })), 'va en el JSON enviado, en «system» y en el .txt de respaldo');
 const p4 = report.buildPayload({ kind: 'error', text: 'x', email: '', attach: false, tech: tp, version: '1' });
 ok(!p4.technical && !p4.system, 'sin «Adjuntar registro técnico» tampoco va el diagnóstico');
+// arranque: MIDI que no responde y pasos lentos (solo valores de listas cerradas; nada de rutas)
+const perf2 = { system: perf.system, app: { ...perf.app, startup: { midi: 'timeout', midiMs: null, midiTimeouts: 2, outputs: 'ok', slow: [{ step: 'library', ms: 6200, done: true }, { step: 'C:\\Users\\Miguel\\Music', ms: 1, done: true }], dir: 'C:\\Users\\Miguel\\Music' } } };
+const tp2 = report.technical({ version: '1', os: 'Windows 11', controller: '', decks: 2, log: [], known, user: 'Miguel', home, perf: perf2 });
+const l2 = report.perfText(tp2.perf).join('\n');
+ok(/Arranque: MIDI no responde · sin respuesta en 5 s 2 veces · salidas de audio aplicadas · pasos de más de 5 s: biblioteca 6200 ms/.test(l2), 'arranque: MIDI sin respuesta y pasos lentos en el diagnóstico');
+ok(!JSON.stringify(tp2.perf).includes('Miguel') && tp2.perf.startup.slow.length === 1 && !('dir' in tp2.perf.startup), 'arranque: sin rutas ni campos desconocidos');
+const p5 = report.technical({ version: '1', os: 'W', controller: '', decks: 2, log: [], known, user: 'Miguel', home, perf: { system: perf.system, app: { ...perf.app, startup: { midi: 'ok', midiMs: 12, midiTimeouts: 0, outputs: 'ok', slow: [] } } } });
+ok(/Arranque: MIDI conectado \(respondió en 12 ms\) · salidas de audio aplicadas · pasos de más de 5 s: ninguno/.test(report.perfText(p5.perf).join('\n')), 'arranque normal');
 
 console.log(`\n${pass} correctas, ${fail} fallidas`);
 process.exit(fail ? 1 : 0);

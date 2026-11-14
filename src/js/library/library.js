@@ -13,7 +13,7 @@ export const SMART_OPS = {
   contains: 'contiene', notcontains: 'no contiene', is: 'es', isnot: 'no es', gt: 'mayor que', lt: 'menor que', between: 'entre'
 };
 
-function newTrack(info) {
+export function newTrack(info) {
   return {
     id: hashId(info.path), path: info.path, source: 'local',
     title: info.title || '', artist: info.artist || '', album: info.album || '', genre: info.genre || '',
@@ -160,10 +160,33 @@ export class Library extends Emitter {
     return this._byPath.get(String(p).toLowerCase()) || null;
   }
 
+  // Pistas sueltas: archivos cargados en un deck desde el panel «Archivos» sin añadirlos a la biblioteca. Viven
+  // solo en memoria (no se guardan); si después se añaden, la biblioteca adopta el mismo objeto (con su análisis)
+  loose = new Map();
+  looseTrack(info) {
+    const id = hashId(info.path);
+    let t = this.tracks.get(id) || this.loose.get(id);
+    if (!t) { t = newTrack(info); t.external = true; this.loose.set(id, t); }
+    return t;
+  }
+  getAny(id) { return this.tracks.get(id) || this.loose.get(id); }
+  // Pasa a la biblioteca las pistas sueltas de esa lista de ids (al soltarlas en una crate o en Prepare).
+  // Devuelve las que se han añadido
+  adoptLoose(ids) {
+    const infos = (ids || []).map(id => this.loose.get(id)).filter(Boolean).map(t => ({ path: t.path }));
+    return infos.length ? this.addFiles(infos) : [];
+  }
+
   addFiles(infos, crateId = null) {
     const added = [];
     for (const info of infos) {
       let t = this.byPath(info.path);
+      if (!t && this.loose.has(hashId(info.path))) {
+        t = this.loose.get(hashId(info.path)); this.loose.delete(t.id); delete t.external;
+        for (const k of ['title', 'artist', 'album', 'genre', 'year', 'isrc']) if (!t[k] && info[k]) t[k] = info[k];
+        t.added = Date.now();
+        this.tracks.set(t.id, t); if (this._byPath) this._byPath.set(t.path.toLowerCase(), t);
+      }
       if (!t) { t = newTrack(info); this.tracks.set(t.id, t); if (this._byPath) this._byPath.set(t.path.toLowerCase(), t); }
       added.push(t);
     }
@@ -202,10 +225,10 @@ export class Library extends Emitter {
   }
 
   update(id, patch) {
-    const t = this.tracks.get(id);
+    const t = this.tracks.get(id) || this.loose.get(id);
     if (!t) return;
     Object.assign(t, patch);
-    this.saveSoon();
+    if (!t.external) this.saveSoon();
     this.emit('track', t);
   }
   // Cambios hechos a mano por el usuario (etiquetas, valoración, explicit): respetan la protección
@@ -439,6 +462,7 @@ export class Library extends Emitter {
     if (!this.guard('crateTracks')) return false;
     const c = this.crates.find(c => c.id === id);
     if (!c) return false;
+    this.adoptLoose(ids); // pistas sueltas del panel «Archivos»: antes, a la biblioteca
     for (const i of ids) if (!c.ids.includes(i)) c.ids.push(i);
     this.saveSoon(); this.emit('change');
     return true;
@@ -558,7 +582,7 @@ export class Library extends Emitter {
   }
 
   // --- Prepare
-  addToPrepare(ids) { for (const i of ids) if (!this.prepare.includes(i)) this.prepare.push(i); this.saveSoon(); this.emit('change'); }
+  addToPrepare(ids) { this.adoptLoose(ids); for (const i of ids) if (!this.prepare.includes(i)) this.prepare.push(i); this.saveSoon(); this.emit('change'); }
   // Devuelve la lista anterior (para deshacer con restorePrepare)
   removeFromPrepare(ids) { const old = this.prepare.slice(); this.prepare = this.prepare.filter(i => !ids.includes(i)); this.saveSoon(); this.emit('change'); return old; }
   restorePrepare(old) {
@@ -619,30 +643,46 @@ export class Library extends Emitter {
     return [];
   }
 
-  query(viewId, search = '', sort = { field: null, dir: 1 }) {
-    let list = this.view(viewId);
-    const q = search.trim().toLowerCase();
-    if (q) {
-      const tokens = q.split(/\s+/);
-      list = list.filter(t => {
-        const hay = `${t.title} ${t.artist} ${t.album} ${t.genre} ${t.comment} ${t.key} ${t.camelot} ${t.year || ''} ${t.bpm ? Math.round(t.bpm) : ''}`.toLowerCase();
-        return tokens.every(tok => hay.includes(tok));
-      });
-    }
-    if (sort && sort.field) {
-      const f = sort.field, d = sort.dir;
-      list = list.slice().sort((a, b) => {
-        let x = a[f], y = b[f];
-        if (f === 'camelot') { x = camelotSortKey(x); y = camelotSortKey(y); }
-        if (f === 'explicit') { x = a.explicit ? 1 : 0; y = b.explicit ? 1 : 0; return (y - x) * d; }
-        if (f === 'rating') { x = a.rating || 0; y = b.rating || 0; return (y - x) * d; }
-        if (x == null || x === '') return 1;
-        if (y == null || y === '') return -1;
-        return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'es', { numeric: true })) * d;
-      });
-    }
-    return list;
+  // fields: campos del buscador (settings.searchFields; null = todos)
+  query(viewId, search = '', sort = { field: null, dir: 1 }, fields = null) {
+    return sortTracks(searchTracks(this.view(viewId), search, fields), sort);
   }
+}
+
+// Campos del buscador (selector junto al buscador de la tabla): por defecto, todos
+export const SEARCH_FIELDS = {
+  title: 'Título', artist: 'Artista', album: 'Álbum', genre: 'Género', comment: 'Comentario', bpm: 'BPM', key: 'Tonalidad', year: 'Año'
+};
+const SEARCH_TEXT = {
+  title: (t) => t.title, artist: (t) => t.artist, album: (t) => t.album, genre: (t) => t.genre, comment: (t) => t.comment,
+  bpm: (t) => (t.bpm ? Math.round(t.bpm) : ''), key: (t) => `${t.key || ''} ${t.camelot || ''}`, year: (t) => t.year
+};
+// Campos elegidos válidos (null o vacío = todos)
+export function searchFields(chosen) {
+  const ok = Array.isArray(chosen) ? chosen.filter(k => SEARCH_TEXT[k]) : [];
+  return ok.length ? ok : Object.keys(SEARCH_TEXT);
+}
+export function searchTracks(list, search = '', fields = null) {
+  const q = String(search || '').trim().toLowerCase();
+  if (!q) return list;
+  const tokens = q.split(/\s+/), keys = searchFields(fields).map(k => SEARCH_TEXT[k]);
+  return list.filter(t => {
+    const hay = keys.map(f => f(t) ?? '').join(' ').toLowerCase();
+    return tokens.every(tok => hay.includes(tok));
+  });
+}
+export function sortTracks(list, sort) {
+  if (!sort || !sort.field) return list;
+  const f = sort.field, d = sort.dir;
+  return list.slice().sort((a, b) => {
+    let x = a[f], y = b[f];
+    if (f === 'camelot') { x = camelotSortKey(x); y = camelotSortKey(y); }
+    if (f === 'explicit') { x = a.explicit ? 1 : 0; y = b.explicit ? 1 : 0; return (y - x) * d; }
+    if (f === 'rating') { x = a.rating || 0; y = b.rating || 0; return (y - x) * d; }
+    if (x == null || x === '') return 1;
+    if (y == null || y === '') return -1;
+    return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'es', { numeric: true })) * d;
+  });
 }
 
 function camelotSortKey(c) {

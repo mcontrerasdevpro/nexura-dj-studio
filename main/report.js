@@ -47,8 +47,28 @@ function perfInfo(perf, anon = {}) {
     tracks: num(a.tracks), perfMode: !!a.perfMode, fpsTarget: num(a.fpsTarget, 1000), layout: clean(a.layout, 12),
     windowMin: num(a.windowMin, 1e4), fps: num(a.fps, 1000), fpsPlaying: num(a.fpsPlaying, 1000),
     longTasks: num(a.longTasks), longMaxMs: num(a.longMaxMs), stalls: num(a.stalls), stallMaxMs: num(a.stallMaxMs),
-    freezes: (Array.isArray(a.freezes) ? a.freezes : []).slice(-10).map(f => ({ minAgo: num(f.minAgo, 1e5), ms: num(f.ms, 1e7), kind: f.kind === 'gpu' ? 'gpu' : 'hilo', gpu: !!f.gpu }))
+    freezes: (Array.isArray(a.freezes) ? a.freezes : []).slice(-10).map(f => ({ minAgo: num(f.minAgo, 1e5), ms: num(f.ms, 1e7), kind: f.kind === 'gpu' ? 'gpu' : 'hilo', gpu: !!f.gpu })),
+    startup: startupInfo(a.startup)
   };
+}
+// Arranque (app.startup en la interfaz): estado de MIDI y pasos lentos. Solo valores de listas cerradas
+const MIDI_STATES = ['init', 'waiting', 'ok', 'denied', 'unsupported', 'timeout'];
+const START_STEPS = ['settings', 'info', 'audio', 'library', 'outputs'];
+function startupInfo(s) {
+  if (!s || typeof s !== 'object') return null;
+  return {
+    midi: MIDI_STATES.includes(s.midi) ? s.midi : '', midiMs: s.midiMs == null ? null : num(s.midiMs, 1e7), midiTimeouts: num(s.midiTimeouts, 1e4) || 0,
+    outputs: ['init', 'ok', 'error'].includes(s.outputs) ? s.outputs : '',
+    slow: (Array.isArray(s.slow) ? s.slow : []).filter(x => x && START_STEPS.includes(x.step)).slice(0, 10).map(x => ({ step: x.step, ms: num(x.ms, 1e7), done: !!x.done }))
+  };
+}
+const MIDI_TEXT = { init: 'sin iniciar', waiting: 'esperando respuesta', ok: 'conectado', denied: 'acceso denegado', unsupported: 'no disponible', timeout: 'no responde' };
+const STEP_TEXT = { settings: 'ajustes', info: 'información de la app', audio: 'motor de audio', library: 'biblioteca', outputs: 'salidas de audio' };
+function startupText(s) {
+  if (!s) return [];
+  const midi = `MIDI ${MIDI_TEXT[s.midi] || '?'}` + (s.midiMs != null ? ` (respondió en ${s.midiMs} ms)` : '') + (s.midiTimeouts ? ` · sin respuesta en 5 s ${s.midiTimeouts} ${s.midiTimeouts === 1 ? 'vez' : 'veces'}` : '');
+  const slow = s.slow.length ? s.slow.map(x => `${STEP_TEXT[x.step]} ${x.done ? `${x.ms} ms` : 'sin terminar'}`).join(' · ') : 'ninguno';
+  return [`Arranque: ${midi} · salidas de audio ${s.outputs === 'ok' ? 'aplicadas' : s.outputs === 'error' ? 'con error' : 'pendientes'} · pasos de más de 5 s: ${slow}`];
 }
 function perfText(p) {
   if (!p) return [];
@@ -59,7 +79,8 @@ function perfText(p) {
     `Aceleración por GPU: ${p.gpuSetting === 'off' ? 'desactivada por el usuario' : 'automática'} · composición ${yes(p.gpuStatus.compositing)} · canvas ${yes(p.gpuStatus.canvas2d)} · rasterización ${yes(p.gpuStatus.raster)} · Electron ${p.electron}`,
     `Biblioteca: ${p.tracks} pistas · modo rendimiento ${yes(p.perfMode)} (objetivo ${p.fpsTarget} fps) · vista de onda ${p.layout}`,
     `Últimos ${p.windowMin} min: onda ${p.fps} fps de media (${p.fpsPlaying} fps sonando) · tareas largas ${p.longTasks} (máx. ${p.longMaxMs} ms) · bloqueos de más de 100 ms ${p.stalls} (máx. ${p.stallMaxMs} ms)`,
-    `Congelaciones de la onda: ${p.freezes.length ? p.freezes.map(f => `hace ${f.minAgo} min, ${f.ms} ms (${f.kind === 'gpu' ? 'sin dibujar con el hilo libre' : 'hilo ocupado'}${f.gpu ? ', GPU activa' : ''})`).join(' · ') : 'ninguna'}`
+    `Congelaciones de la onda: ${p.freezes.length ? p.freezes.map(f => `hace ${f.minAgo} min, ${f.ms} ms (${f.kind === 'gpu' ? 'sin dibujar con el hilo libre' : 'hilo ocupado'}${f.gpu ? ', GPU activa' : ''})`).join(' · ') : 'ninguna'}`,
+    ...startupText(p.startup)
   ];
 }
 

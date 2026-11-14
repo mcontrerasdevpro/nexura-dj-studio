@@ -404,6 +404,108 @@ async function audioTreeFor(paths) {
 }
 
 // ---------------------------------------------------------------------------
+// Panel «Archivos» (explorador de la biblioteca): unidades, carpetas de usuario y contenido de una carpeta.
+// Una sola carpeta cada vez (sin leer subcarpetas), con fs.promises; las rutas no se escriben en el registro.
+// ---------------------------------------------------------------------------
+// carpetas del sistema que no se muestran: en la raíz de una unidad y en cualquier sitio
+const SYSTEM_ROOT_DIRS = new Set(['windows', 'program files', 'program files (x86)', 'programdata', 'recovery', 'perflogs', 'boot', 'documents and settings', 'msocache', 'config.msi', 'windows.old', 'intel', 'amd', 'nvidia', 'esd', 'onedrivetemp', 'xboxgames', 'drivers']);
+const SYSTEM_DIRS = new Set(['system volume information', '$recycle.bin', '$windows.~bt', '$windows.~ws', '$sysreset', '$winreagent', 'appdata', 'node_modules', '__macosx', 'lost+found']);
+const isDriveRoot = (p) => /^[a-z]:[\\/]?$/i.test(p) || p === '/';
+const hiddenName = (n) => n.startsWith('.') || n.startsWith('$') || n.startsWith('~$');
+// promesa con tiempo máximo (una unidad de red caída puede tardar mucho en responder)
+const within = (p, ms, fallback) => Promise.race([p, new Promise(r => setTimeout(() => r(fallback), ms))]);
+
+// Etiquetas de las unidades de Windows (nombre del volumen): una consulta de PowerShell, como mucho 4 s y en
+// caché 30 s. Si falla, las unidades salen sin nombre
+let driveLabels = { at: 0, map: null };
+function windowsDriveLabels() {
+  if (driveLabels.map && Date.now() - driveLabels.at < 30000) return Promise.resolve(driveLabels.map);
+  return new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    const cmd = '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,VolumeName,DriveType | ConvertTo-Json -Compress';
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 4000, encoding: 'utf8' }, (err, out) => {
+      const map = new Map();
+      if (!err) {
+        try { for (const d of [].concat(JSON.parse(out || '[]'))) if (d && d.DeviceID) map.set(String(d.DeviceID).toUpperCase(), { label: String(d.VolumeName || ''), type: Number(d.DriveType) || 0 }); }
+        catch (_) { /* salida inesperada */ }
+      }
+      driveLabels = { at: Date.now(), map };
+      resolve(map);
+    });
+    child.on('error', () => resolve(new Map()));
+  });
+}
+
+async function fileRoots() {
+  const places = [];
+  for (const [name, key, kind] of [['Música', 'music', 'music'], ['Documentos', 'documents', 'docs'], ['Escritorio', 'desktop', 'desktop'], ['Descargas', 'downloads', 'downloads']]) {
+    try { const p = app.getPath(key); if (p && await within(fsp.access(p).then(() => true, () => false), 1500, false)) places.push({ name, path: p, kind }); } catch (_) { /* no existe */ }
+  }
+  const drives = [];
+  if (process.platform === 'win32') {
+    const labelsP = windowsDriveLabels();
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const ok = await Promise.all(letters.map(l => within(fsp.access(l + ':\\').then(() => true, () => false), 1500, false)));
+    const labels = await labelsP;
+    letters.forEach((l, i) => {
+      const info = labels.get(l + ':');
+      if (!ok[i] && !info) return;
+      // 2 = extraíble, 3 = disco local, 4 = de red, 5 = CD/DVD
+      drives.push({ name: info && info.label ? info.label : '', letter: l + ':', path: l + ':\\', kind: info && info.type === 4 ? 'net' : info && info.type === 2 ? 'usb' : info && info.type === 5 ? 'cd' : 'disk', ready: ok[i] });
+    });
+  } else {
+    drives.push({ name: 'Equipo', letter: '/', path: '/', kind: 'disk', ready: true });
+    for (const base of process.platform === 'darwin' ? ['/Volumes'] : ['/media/' + os.userInfo().username, '/mnt', '/run/media/' + os.userInfo().username]) {
+      try { for (const e of await fsp.readdir(base, { withFileTypes: true })) if (e.isDirectory() && !hiddenName(e.name)) drives.push({ name: e.name, letter: '', path: path.join(base, e.name), kind: 'usb', ready: true }); } catch (_) { /* no existe */ }
+    }
+  }
+  return { places, drives };
+}
+
+// Contenido de una carpeta: subcarpetas (sin las del sistema ni las ocultas) y archivos de audio
+async function listFolder(dir) {
+  dir = String(dir || '');
+  if (!path.isAbsolute(dir)) return { path: dir, error: 'missing', dirs: [], files: [] };
+  let entries;
+  try { entries = await within(fsp.readdir(dir, { withFileTypes: true }), 8000, null); }
+  catch (e) { return { path: dir, error: e && (e.code === 'EPERM' || e.code === 'EACCES') ? 'denied' : e && e.code === 'ENOENT' ? 'missing' : 'error', dirs: [], files: [] }; }
+  if (!entries) return { path: dir, error: 'slow', dirs: [], files: [] };
+  const root = isDriveRoot(dir), dirs = [], files = [];
+  for (const e of entries) {
+    const low = e.name.toLowerCase();
+    if (hiddenName(e.name) || low === 'desktop.ini' || low === 'thumbs.db') continue;
+    // los enlaces y uniones (p. ej. «Mi música» dentro de Documentos) se saltan: suelen dar acceso denegado
+    if (e.isDirectory()) { if (!SYSTEM_DIRS.has(low) && !(root && SYSTEM_ROOT_DIRS.has(low))) dirs.push({ name: e.name, path: path.join(dir, e.name) }); }
+    else if (e.isFile() && AUDIO_EXT.has(path.extname(e.name).toLowerCase())) files.push({ name: e.name, path: path.join(dir, e.name) });
+  }
+  dirs.sort(byName); files.sort(byName);
+  // tamaño y fecha de los archivos, de 32 en 32 (sin esperar a cada uno por separado)
+  for (let i = 0; i < files.length; i += 32) {
+    await Promise.all(files.slice(i, i + 32).map(f => fsp.stat(f.path).then(st => { f.size = st.size; f.mtime = st.mtimeMs; }, () => {})));
+  }
+  const parent = path.dirname(dir);
+  return { path: dir, name: path.basename(dir) || dir, parent: parent !== dir ? parent : null, dirs, files };
+}
+
+// Etiquetas (título, artista, BPM, tonalidad…) y duración de archivos que no están en la biblioteca: de uno en
+// uno, con una pausa entre archivos para no competir con la carga de pistas ni con el análisis
+async function audioMeta(paths) {
+  const { probeFile } = require('./main/audio-probe');
+  const out = [];
+  for (const p of (Array.isArray(paths) ? paths : []).slice(0, 64).map(String)) {
+    if (!AUDIO_EXT.has(path.extname(p).toLowerCase())) continue;
+    try {
+      const info = await fileInfo(p);
+      let dur = 0;
+      try { const pr = await probeFile(p); dur = pr && pr.dur > 0 ? pr.dur : 0; } catch (_) { /* sin duración */ }
+      out.push({ ...info, duration: dur });
+    } catch (_) { out.push({ path: p, error: true }); }
+    await new Promise(r => setImmediate(r));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // YouTube: OAuth (opcional, para "Mis listas") y API Data v3
 // ---------------------------------------------------------------------------
 const secretsFile = () => path.join(dataDir(), 'secrets.bin');
@@ -1150,13 +1252,50 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('rec:save', async (_e, data, name) => {
-    await fsp.mkdir(recDir(), { recursive: true });
+  // Grabación: en la carpeta elegida (Ajustes o franja de grabación) o, si no hay, en la de siempre. Si la
+  // elegida ya no existe o no se puede escribir en ella, se guarda en la de siempre y se avisa (fallback)
+  ipcMain.handle('rec:save', async (_e, data, name, dir) => {
     const safe = String(name || 'Nexura-set').replace(/[^a-z0-9 _.-]/gi, '_');
-    const file = path.join(recDir(), safe.endsWith('.wav') ? safe : safe + '.wav');
-    await fsp.writeFile(file, Buffer.from(data));
-    return file;
+    const fname = safe.endsWith('.wav') ? safe : safe + '.wav';
+    const buf = Buffer.from(data);
+    const custom = typeof dir === 'string' && dir && path.isAbsolute(dir) ? dir : '';
+    let fallback = '';
+    if (custom) {
+      try {
+        if (!(await fsp.stat(custom)).isDirectory()) throw Object.assign(new Error('no es una carpeta'), { code: 'ENOENT' });
+        const file = path.join(custom, fname);
+        await fsp.writeFile(file, buf);
+        return { file, fallback: '' };
+      } catch (e) {
+        fallback = e && e.code === 'ENOENT' ? 'missing' : 'denied';
+        log('WARN', 'grabacion', `La carpeta de grabación elegida ${fallback === 'missing' ? 'no existe' : 'no admite escritura'} (${(e && e.code) || 'error'}): se guarda en la de siempre`);
+      }
+    }
+    await fsp.mkdir(recDir(), { recursive: true });
+    const file = path.join(recDir(), fname);
+    await fsp.writeFile(file, buf);
+    return { file, fallback };
   });
+  // Elegir la carpeta de grabación (diálogo de carpeta) → ruta o null
+  ipcMain.handle('rec:pickDir', async (_e, current) => {
+    const r = await dialog.showOpenDialog(mainWindow, { title: 'Carpeta para las grabaciones', defaultPath: typeof current === 'string' && current ? current : recDir(), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return r.filePaths[0];
+  });
+  // ¿Se puede grabar en esa carpeta? → { ok, reason: '' | 'missing' | 'denied' }
+  ipcMain.handle('rec:checkDir', async (_e, dir) => {
+    if (typeof dir !== 'string' || !dir || !path.isAbsolute(dir)) return { ok: false, reason: 'missing' };
+    try {
+      if (!(await fsp.stat(dir)).isDirectory()) return { ok: false, reason: 'missing' };
+      await fsp.access(dir, fs.constants.W_OK);
+      return { ok: true, reason: '' };
+    } catch (e) { return { ok: false, reason: e && e.code === 'ENOENT' ? 'missing' : 'denied' }; }
+  });
+
+  // ---- Panel «Archivos»
+  ipcMain.handle('files:roots', () => fileRoots());
+  ipcMain.handle('files:list', (_e, dir) => listFolder(dir));
+  ipcMain.handle('files:meta', (_e, paths) => audioMeta(paths));
   ipcMain.handle('shell:showItem', (_e, p) => { shell.showItemInFolder(p); return true; });
   // ---- Registro técnico: líneas de la interfaz (errores de JS, promesas, audio, MIDI…)
   ipcMain.on('log:write', (_e, lines) => {

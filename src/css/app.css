@@ -1531,3 +1531,59 @@ body.view-lib .lib-quick { display: inline-flex; gap: 3px; flex: none; }
 #library.dense .si-count { font-size: 10.5px; }
 #library.dense .side-foot { gap: 6px; padding: 5px 6px; }
 #library.dense .side-btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+/* 17. Arranque sin MIDI, panel Archivos, campos del buscador y carpeta de grabación ------------------- */
+/* aviso discreto si la controladora no responde (abajo a la izquierda; los avisos normales van a la derecha) */
+.midi-notice { position: fixed; left: 16px; bottom: 32px; z-index: 300; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); padding: 7px 8px 7px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--warn); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
+.midi-notice span { min-width: 0; }
+.status-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+/* panel Archivos: barra (ruta, número de archivos y «Añadir esta carpeta») y columnas desplazables */
+.lib-files { display: flex; flex-direction: column; gap: 5px; height: 186px; padding: 6px 8px; border-bottom: 1px solid var(--side-line); flex: none; }
+.fb-bar { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fb-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
+.fb-status { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.fb-add { flex: none; }
+.fb-cols { flex: 1; min-height: 0; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.fb-col { flex: 0 0 210px; display: flex; flex-direction: column; min-height: 0; background: var(--side-bg); border: 1px solid var(--side-line); border-radius: var(--radius); overflow: hidden; }
+.fb-roots { flex-basis: 230px; }
+.fb-head { display: flex; justify-content: space-between; gap: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--side-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-head small { font: 10px var(--mono); }
+.fb-list { flex: 1; min-height: 0; overflow: auto; }
+.fb-sep { padding: 5px 8px 2px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.fb-item { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; height: 22px; padding: 0 6px 0 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.fb-item i { flex: none; width: 14px; font-style: normal; text-align: center; color: var(--muted); }
+.fb-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-item b { flex: none; color: var(--muted); font-weight: 400; }
+.fb-item:hover { background: var(--hover); }
+.fb-item.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); color: var(--sel-text); }
+.fb-item.on i, .fb-item.on b { color: var(--sel-text); }
+.fb-item.loading span::after { content: ' …'; }
+.fb-item.off { opacity: .55; }
+.fb-item:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: -1px; }
+.fb-note { margin: 6px 8px; font-size: 11.5px; color: var(--muted); }
+.fb-note.warn { color: var(--warn); }
+#library.dense .lib-files { height: 172px; }
+#library.dense .fb-item { height: 20px; font-size: 12px; }
+/* archivos que no están en la biblioteca: más apagados y con ◌ */
+.row-t.ext > span { opacity: .62; }
+.row-t.ext.sel > span, .row-t.ext.cur > span { opacity: .85; }
+.st.ext { color: var(--muted); }
+
+/* campos del buscador: icono junto al buscador (marcado si hay campos desmarcados) y desplegable con casillas */
+.search-fields { all: unset; box-sizing: border-box; position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--side-btn-line); border-radius: 5px; color: var(--muted); cursor: pointer; }
+.search-fields:hover { background: var(--hover); color: var(--text); }
+.search-fields.on { color: var(--sel-text); background: var(--sel); border-color: var(--sel-line); }
+.search-fields .sf-dot { display: none; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.search-fields.on .sf-dot { display: block; }
+.search-fields:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: 1px; }
+#library.dense .search-fields { width: 24px; height: 24px; }
+.sf-menu { position: fixed; z-index: 400; min-width: 170px; padding: 4px 0 6px; background: var(--panel3); border: 1px solid var(--line2); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+.sf-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 8px 5px 10px; font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.sf-opt { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.sf-opt:hover { background: var(--hover); }
+
+/* carpeta de grabación */
+.rec-where.warn, .set-path.warn { color: var(--warn); }
+.set-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.set-path { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font: 11.5px var(--mono); color: var(--muted); }

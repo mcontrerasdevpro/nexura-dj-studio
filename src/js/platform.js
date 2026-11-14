@@ -215,13 +215,32 @@ export const platform = {
   },
   async waveGet(id) { if (N) return N.waveGet(id); return webWaves.get(id) || null; },
   async waveSet(id, data) { if (N) return N.waveSet(id, data); webWaves.set(id, data); return true; },
-  async saveRecording(bytes, name) {
-    if (N) return N.saveRecording(bytes, name);
+  // dir: carpeta elegida (vacío = la de siempre) → { file, fallback: '' | 'missing' | 'denied' }
+  async saveRecording(bytes, name, dir = '') {
+    if (N) {
+      const r = await N.saveRecording(bytes, name, dir);
+      return typeof r === 'string' ? { file: r, fallback: '' } : r;
+    }
     const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
     const a = document.createElement('a');
     a.href = url; a.download = name + '.wav'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    return name + '.wav';
+    return { file: name + '.wav', fallback: '' };
+  },
+  // Carpeta de grabación (solo escritorio): elegir con un diálogo y comprobar que se puede escribir en ella
+  recDir: {
+    available: !!(N && N.recPickDir),
+    pick(current) { return N && N.recPickDir ? N.recPickDir(current) : Promise.resolve(null); },
+    check(dir) { return N && N.recCheckDir ? N.recCheckDir(dir) : Promise.resolve({ ok: true, reason: '' }); }
+  },
+  // Panel «Archivos» (solo escritorio): unidades y carpetas de usuario, contenido de una carpeta y etiquetas
+  files: {
+    available: !!(N && N.files),
+    roots() { return N && N.files ? N.files.roots() : Promise.resolve({ places: [], drives: [] }); },
+    list(dir) { return N && N.files ? N.files.list(dir) : Promise.resolve({ path: dir, error: 'missing', dirs: [], files: [] }); },
+    meta(paths) { return N && N.files ? N.files.meta(paths) : Promise.resolve([]); },
+    // árbol de una carpeta con sus subcarpetas, para añadirla (la misma importación que «+ Carpeta»)
+    tree(paths) { return N && N.listAudioTree ? N.listAudioTree(paths) : Promise.resolve({ files: [], dirs: [] }); }
   },
   showItem(p) { if (N) N.showItem(p); },
   openExternal(url) {

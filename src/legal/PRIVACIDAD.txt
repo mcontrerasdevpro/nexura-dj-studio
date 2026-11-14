@@ -9,12 +9,14 @@ Resumen: Nexura DJ Studio funciona en tu ordenador. Tu música, tu biblioteca y 
 1. QUÉ SE GUARDA EN TU ORDENADOR (no se envía a nadie)
 Todo se guarda en la carpeta de datos de la app (%APPDATA%\Nexura DJ Studio):
 - Biblioteca: rutas de tus archivos de música, etiquetas, análisis (BPM, tonalidad, forma de onda), hot cues, loops, beatgrid, crates, Prepare e historial de sesiones.
-- Ajustes de la app y de tus controladoras MIDI (y, en «arranque.json», si la aceleración por GPU está desactivada).
+- Ajustes de la app y de tus controladoras MIDI, incluidas la carpeta de grabación que elijas y la última carpeta abierta en el panel «Archivos» (y, en «arranque.json», si la aceleración por GPU está desactivada).
 - Copias de seguridad automáticas de la biblioteca (carpeta «copias», las 14 últimas).
 - Registro técnico de errores (carpeta «logs», 5 archivos de 1 MB como mucho).
 - Si conectas tu cuenta de Google o de Spotify: las claves de sesión, cifradas con el sistema de Windows.
-- Los stems que separes y las grabaciones que hagas.
+- Los stems que separes.
 Puedes borrar todo esto desinstalando la app y eliminando esa carpeta.
+Las grabaciones que hagas se guardan en Música › Nexura DJ Studio › Grabaciones o en la carpeta que elijas (y ahí se quedan aunque desinstales la app).
+El panel «Archivos» lee las carpetas y unidades de tu equipo solo para mostrarte su música: no copia, mueve ni borra nada, no envía nada fuera del equipo y sus rutas no aparecen en el registro técnico ni en el informe de errores.
 
 2. QUÉ SE ENVÍA, SOLO SI TÚ LO PERMITES O LO PIDES
 
@@ -22,7 +24,7 @@ a) Estadísticas anónimas de uso (opcional; Ajustes → General → «Enviar es
 Como mucho una vez al día se envía SOLO: un identificador aleatorio de la instalación (generado en tu equipo, sin relación con tu nombre, tu cuenta ni tu equipo), la versión de la app, el idioma, si es Windows 10 u 11, el número de decks que usas (2 o 4) y si hay una controladora conectada (sí/no, sin el modelo). Nunca tu música, nombres de archivos, canciones ni datos personales. Sirve únicamente para saber cuánta gente usa la app y con qué versiones. Base legal: tu consentimiento, que puedes retirar desactivando la opción.
 
 b) Informes de errores y sugerencias (solo cuando pulsas «Enviar»).
-Se envía el tipo y el texto que escribes, tu email si lo indicas (solo para responderte) y, si marcas «Adjuntar registro técnico», la versión, Windows, la controladora MIDI conectada, un diagnóstico de rendimiento (modelo de procesador y número de núcleos, memoria RAM, modelo y controlador de la tarjeta gráfica, si la aceleración por GPU está activa, número de pistas de la biblioteca, tus ajustes de rendimiento y lo fluida que ha ido la forma de onda en los últimos minutos) y las últimas 200 líneas del registro, sin rutas de archivos, nombres de canciones, artistas ni correos (se sustituyen antes de enviarlo; puedes ver exactamente qué se envía antes de pulsar). Si no se puede enviar, se abre tu programa de correo y el informe se guarda en un archivo de texto que decides tú si adjuntar. Base legal: tu consentimiento al enviarlo.
+Se envía el tipo y el texto que escribes, tu email si lo indicas (solo para responderte) y, si marcas «Adjuntar registro técnico», la versión, Windows, la controladora MIDI conectada, un diagnóstico de rendimiento (modelo de procesador y número de núcleos, memoria RAM, modelo y controlador de la tarjeta gráfica, si la aceleración por GPU está activa, número de pistas de la biblioteca, tus ajustes de rendimiento, lo fluida que ha ido la forma de onda en los últimos minutos y si al arrancar la controladora MIDI respondió y qué pasos tardaron) y las últimas 200 líneas del registro, sin rutas de archivos, nombres de canciones, artistas ni correos (se sustituyen antes de enviarlo; puedes ver exactamente qué se envía antes de pulsar). Si no se puede enviar, se abre tu programa de correo y el informe se guarda en un archivo de texto que decides tú si adjuntar. Base legal: tu consentimiento al enviarlo.
 
 c) Actualizaciones (Ajustes → General → «Buscar actualizaciones automáticamente»).
 La app consulta las versiones publicadas en GitHub (GitHub, Inc.). Como en cualquier descarga, GitHub recibe tu dirección IP y la versión que se descarga; NexuraIA no recibe nada.
