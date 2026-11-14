@@ -1,6 +1,6 @@
 # Novedades de Nexura DJ Studio
 
-## Próxima versión · en preparación
+## 1.0.0-rc.6 · noviembre de 2026
 
 ### Vista Biblioteca: más pistas a la vista
 - Nuevo botón **▤ BIBLIOTECA** en la barra superior (o la tecla **F10**): los decks se vuelven compactos arriba, con la **forma de onda grande en el centro**, y la biblioteca ocupa el resto de la pantalla. En una pantalla de 1920 × 1080 pasas de ver **8 pistas a ver 30**.
