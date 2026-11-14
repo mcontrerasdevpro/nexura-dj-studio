@@ -1,6 +1,16 @@
 [
+  "pioneer-ddj-400.json",
+  "pioneer-ddj-flx4.json",
+  "pioneer-ddj-sb3.json",
+  "hercules-inpulse-200.json",
+  "hercules-inpulse-300.json",
+  "hercules-inpulse-500.json",
+  "reloop-mixtour.json",
+  "reloop-mixon4.json",
   "pioneer-ddj.json",
   "numark.json",
   "hercules.json",
-  "reloop.json"
+  "reloop.json",
+  "denon.json",
+  "native-instruments.json"
 ]

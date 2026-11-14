@@ -163,6 +163,7 @@ class App extends Emitter {
       this.feedback.log('INFO', 'midi', `Dispositivos: ${this.midi.connectedNames.join(', ') || 'ninguno'} · controladora: ${this.midi.controllerName || 'ninguna'}`);
     });
     this.midi.on('profile', () => this.updateDeckMode());
+    this.midi.on('detected', (d) => this.onControllerDetected(d));
     this.midi.on('status', (s, prev) => this.onMidiStatus(s, prev));
     // teclado y bucle de dibujo, ya: no dependen de MIDI ni de las salidas de audio
     this.bindKeyboard();
@@ -256,6 +257,45 @@ class App extends Emitter {
     document.body.appendChild(this.midiNotice);
   }
   hideMidiNotice() { if (this.midiNotice) { this.midiNotice.remove(); this.midiNotice = null; } }
+
+  // ------------------------------------------------------------------ MIDI: controladora conectada (al arrancar o en caliente)
+  // Con perfil (incluido, asistente o importado): aviso breve. Sin perfil: aviso con tres opciones (asistente,
+  // mapeo de Mixxx, «Ahora no»). «Ahora no» se recuerda por dispositivo (settings.midiDismissed) y el aviso se
+  // vuelve a abrir desde Ajustes → MIDI.
+  onControllerDetected({ name, info }) {
+    this.feedback.log('INFO', 'midi', `Controladora detectada: ${name} · perfil ${info.type}${info.model ? ` (${info.model})` : ''}${info.custom ? ` · ${info.custom} controles propios` : ''}`);
+    if (info.type === 'incluido') return toast(`Controladora ${info.model || name} detectada: perfil cargado`, 'ok', 5000);
+    if (info.type !== 'ninguno') return toast(`Controladora ${name} detectada: ${info.label} (${info.custom} controles)`, 'ok', 5000);
+    if ((this.settings.midiDismissed || []).includes(name)) return;
+    this.showControllerNotice(name);
+  }
+  showControllerNotice(name) {
+    this.ctlNotices = this.ctlNotices || new Map();
+    if (this.ctlNotices.has(name)) return;
+    const info = this.midi.profileInfo(name);
+    const close = () => { const n = this.ctlNotices.get(name); if (n) n.remove(); this.ctlNotices.delete(name); };
+    const later = btn('Ahora no', { cls: 'micro ctl-later', onClick: () => {
+      const list = new Set(this.settings.midiDismissed || []); list.add(name);
+      this.setSetting('midiDismissed', [...list]);
+      this.feedback.log('INFO', 'midi', `«Ahora no» para ${name}`);
+      close();
+    } });
+    const box = el('div', { class: 'ctl-notice', role: 'dialog', 'aria-label': 'Controladora nueva' },
+      el('div', { class: 'ctl-text' },
+        el('b', {}, `Controladora ${name} detectada`),
+        el('span', {}, `No hay un perfil incluido para este modelo${info.family ? ` (se reconoce la marca ${info.family})` : ''}. ¿Cómo quieres configurarla?`)),
+      el('div', { class: 'ctl-actions' },
+        btn('Configurar con el asistente', { cls: 'micro primary ctl-wizard', onClick: () => { close(); this.settingsUI.openWizard(name); } }),
+        btn('Importar un mapeo de Mixxx', { cls: 'micro ctl-mixxx', onClick: () => { close(); this.settingsUI.mixxxDialog(name); } }),
+        later));
+    this.ctlNotices.set(name, box);
+    document.body.appendChild(box);
+  }
+  // Ajustes → MIDI: volver a ofrecer las opciones a un dispositivo al que se dijo «Ahora no»
+  reopenControllerNotice(name) {
+    this.setSetting('midiDismissed', (this.settings.midiDismissed || []).filter(n => n !== name));
+    this.showControllerNotice(name);
+  }
 
   // Contador anónimo (main/stats.js): solo si el usuario lo ha permitido y hay statsUrl; una vez al día
   sendStatsSoon() {

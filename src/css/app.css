@@ -1536,6 +1536,16 @@ body.view-lib .lib-quick { display: inline-flex; gap: 3px; flex: none; }
 /* aviso discreto si la controladora no responde (abajo a la izquierda; los avisos normales van a la derecha) */
 .midi-notice { position: fixed; left: 16px; bottom: 32px; z-index: 300; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); padding: 7px 8px 7px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--warn); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
 .midi-notice span { min-width: 0; }
+/* Controladora nueva sin perfil: asistente, mapeo de Mixxx o «Ahora no» (app.js → showControllerNotice) */
+.ctl-notice { position: fixed; right: 16px; bottom: 32px; z-index: 300; display: flex; flex-direction: column; gap: 8px; width: min(440px, calc(100vw - 32px)); padding: 10px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--ok, #3ddc84); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
+.ctl-notice + .ctl-notice { bottom: 150px; }
+.ctl-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.ctl-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.dev-list li.ctl-dev { margin-bottom: 8px; }
+.ctl-dev-actions { flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ctl-dev-actions label { display: inline-flex; align-items: center; gap: 6px; }
+.ctl-models { margin: 0 0 8px; padding-left: 18px; font-size: 12.5px; }
+.ctl-models li { margin-bottom: 3px; }
 .status-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 
 /* panel Archivos: barra (ruta, número de archivos y «Añadir esta carpeta») y columnas desplazables */

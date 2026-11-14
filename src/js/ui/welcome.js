@@ -41,8 +41,8 @@ export class Welcome {
       {
         title: 'Conecta tu controladora',
         body: [
-          el('p', {}, 'Conéctala por USB. Muchos modelos se reconocen solos; si el tuyo no, el asistente te guía control a control (botones, faders, platos y pads).'),
-          el('p', { class: 'hint' + (ctl ? ' ok' : '') }, ctl ? `Controladora detectada: ${ctl}` : 'Ahora mismo no hay ninguna controladora MIDI conectada. También puedes pinchar con teclado y ratón.'),
+          el('p', {}, 'Funciona con cualquier controladora MIDI por USB. Algunos modelos (Denon DJ MC4000, Pioneer DJ DDJ-400, FLX4 y SB3, Hercules Inpulse 200/300/500, Reloop Mixtour y Mixon 4) se reconocen solos; con cualquier otra, el asistente te guía control a control (botones, faders, platos y pads) o importas su mapeo de Mixxx.'),
+          el('p', { class: 'hint' + (ctl ? ' ok' : '') }, ctl ? `Controladora detectada: ${ctl} (${app.midi.profileInfo(ctl).label})` : 'Ahora mismo no hay ninguna controladora MIDI conectada. También puedes pinchar con teclado y ratón.'),
           el('div', { class: 'wl-actions' }, btn('Abrir el asistente MIDI', { onClick: () => app.settingsUI.open('midi') }))
         ]
       },

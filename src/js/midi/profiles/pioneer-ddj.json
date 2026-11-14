@@ -1,9 +1,13 @@
 {
-  "id": "pioneer-ddj-generic",
-  "name": "Pioneer DDJ (genérico)",
-  "match": ["\\bDDJ[- ]", "Pioneer DJ"],
-  "manufacturer": "Pioneer DJ",
-  "version": 1,
-  "mappings": [],
-  "note": "Plantilla deliberadamente vacía: los números MIDI varían entre modelos. Usa MIDI Learn para crear un perfil verificado para tu modelo exacto."
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "pioneer-ddj-generic",
+ "name": "Pioneer DJ (otros modelos)",
+ "manufacturer": "Pioneer DJ",
+ "generic": true,
+ "match": [
+  "\\bDDJ[- ]",
+  "Pioneer DJ"
+ ],
+ "mappings": [],
+ "note": "Modelos sin perfil incluido: los números MIDI cambian entre modelos. Usa el asistente o importa un mapeo de Mixxx."
 }

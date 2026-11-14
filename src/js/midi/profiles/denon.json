@@ -1,0 +1,16 @@
+{
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "denon-generic",
+ "name": "Denon DJ (otros modelos)",
+ "manufacturer": "Denon DJ",
+ "generic": true,
+ "match": [
+  "Denon",
+  "\\bMC ?[0-9]{4}",
+  "\\bMCX ?8000",
+  "\\bSC ?LIVE",
+  "\\bPRIME"
+ ],
+ "mappings": [],
+ "note": "MC6000MK2: su tabla oficial no indica el canal MIDI de cada deck. MC7000: Denon DJ no ha publicado su tabla MIDI. Usa el asistente o importa un mapeo de Mixxx. (La MC4000 tiene perfil nativo.)"
+}

@@ -261,7 +261,7 @@ export const platform = {
     async preview(info) {
       if (N && N.report) return N.report.preview(info);
       const { anonymize } = await webAnonymizer();
-      return { version: 'web', os: navigator.platform || 'navegador', controller: info.controller || 'ninguna', decks: info.decks === 4 ? 4 : 2, log: webLog.slice(-200).map(l => anonymize(l, { known: info.known })) };
+      return { version: 'web', os: navigator.platform || 'navegador', controller: info.controller || 'ninguna', controllers: (info.controllers || []).slice(0, 6), decks: info.decks === 4 ? 4 : 2, log: webLog.slice(-200).map(l => anonymize(l, { known: info.known })) };
     },
     async send(info) {
       if (N && N.report) return N.report.send(info);

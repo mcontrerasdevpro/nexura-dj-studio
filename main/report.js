@@ -17,17 +17,34 @@ const validEmail = (s) => /^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$/.test(String
 
 // Parte técnica (solo si se marca «Adjuntar registro técnico»): versión, sistema, controladora y las
 // últimas líneas del registro, sin rutas, canciones, artistas ni correos.
-function technical({ version, os, controller, decks, log = [], known = [], user = '', home = '', perf = null }) {
+function technical({ version, os, controller, controllers = [], decks, log = [], known = [], user = '', home = '', perf = null }) {
   const ctl = String(controller || '').slice(0, 80);
   const t = {
     version: String(version || ''),
     os: String(os || ''),
     controller: ctl ? anonymize(ctl, { known, user, home }) : 'ninguna',
+    controllers: controllerList(controllers, { known, user, home }),
     decks: [2, 4].includes(Number(decks)) ? Number(decks) : 2,
     log: (log || []).slice(-LOG_LINES).map(l => anonymize(l, { known, user, home }))
   };
   if (perf) t.perf = perfInfo(perf, { known, user, home });
   return t;
+}
+
+// Controladoras conectadas: nombre del puerto MIDI (lo da el fabricante, p. ej. «DDJ-400»; no es un dato
+// personal) y tipo de perfil, de una lista cerrada
+const PROFILE_TYPES = ['incluido', 'asistente', 'importado', 'ninguno'];
+const PROFILE_TEXT = { incluido: 'perfil incluido', asistente: 'configurada con el asistente o MIDI Learn', importado: 'mapeo importado', ninguno: 'sin perfil' };
+function controllerList(list, anon) {
+  return (Array.isArray(list) ? list : []).slice(0, 6).filter(c => c && c.port).map(c => ({
+    port: anonymize(txt(c.port, 80), anon),
+    type: PROFILE_TYPES.includes(c.type) ? c.type : 'ninguno',
+    model: anonymize(txt(c.model, 60), anon)
+  }));
+}
+function controllersText(list) {
+  if (!list || !list.length) return 'ninguna';
+  return list.map(c => `${c.port} (${PROFILE_TEXT[c.type]}${c.model && c.type === 'incluido' ? ': ' + c.model : ''})`).join(' · ');
 }
 
 // Diagnóstico de rendimiento: solo números, modelos de procesador y tarjeta gráfica y ajustes de la app
@@ -85,15 +102,16 @@ function perfText(p) {
 }
 
 // Texto legible del informe (vista previa del diálogo y archivo .txt de respaldo)
-function reportText({ kind, text, email, tech }) {
+function reportText({ kind, text, email, userController = '', tech }) {
   const out = [
     `Nexura DJ Studio — ${KINDS[kind] || 'Otro'}`,
     `Fecha: ${new Date().toISOString()}`,
     email ? `Contacto: ${email}` : 'Contacto: (no indicado)',
+    ...(userController ? [`Controladora (según el usuario): ${userController}`] : []),
     '', String(text || '').trim(), ''
   ];
   if (tech) {
-    out.push('--- Registro técnico ---', `Versión: ${tech.version}`, `Sistema: ${tech.os}`, `Controladora MIDI: ${tech.controller}`, `Decks: ${tech.decks}`);
+    out.push('--- Registro técnico ---', `Versión: ${tech.version}`, `Sistema: ${tech.os}`, `Controladora MIDI: ${tech.controller}`, `Controladoras conectadas: ${controllersText(tech.controllers)}`, `Decks: ${tech.decks}`);
     if (tech.perf) out.push('--- Diagnóstico de rendimiento ---', ...perfText(tech.perf));
     out.push(`Últimas ${tech.log.length} líneas del registro:`, ...tech.log);
   }
@@ -102,19 +120,26 @@ function reportText({ kind, text, email, tech }) {
 
 // JSON que se envía al endpoint. Incluye los campos del flujo de sugerencias de la beta (subject,
 // category, message, contact, system, errors) para que el webhook ya existente siga funcionando.
-function buildPayload({ kind, text, email, attach, tech, version }) {
+// «¿Qué controladora usas?» (opcional, lo escribe el usuario): una línea corta
+const cleanUserController = (s) => txt(s, 80).trim();
+
+function buildPayload({ kind, text, email, userController = '', attach, tech, version }) {
   const k = KINDS[kind] ? kind : 'other';
   const msg = String(text || '').trim().slice(0, 8000);
   const contact = validEmail(email) ? String(email).trim() : '';
   const first = msg.split('\n')[0].slice(0, 60);
+  const uc = cleanUserController(userController);
   const p = {
-    app: 'Nexura DJ Studio', type: k, category: KINDS[k], message: msg, email: contact, contact,
+    app: 'Nexura DJ Studio', type: k, category: KINDS[k],
+    // la controladora también va al final del mensaje, para que la vea el flujo de sugerencias tal como está
+    message: msg + (uc ? `\n\n— Controladora: ${uc}` : ''), email: contact, contact,
+    ...(uc ? { controllerUser: uc } : {}),
     version: String(version || ''), date: new Date().toISOString(),
     subject: `[Nexura DJ Studio ${version || ''}] ${KINDS[k]}${first ? ': ' + first : ''}`
   };
   if (attach && tech) {
     p.technical = tech;
-    p.system = `Versión: ${tech.version}\nSistema: ${tech.os}\nControladora MIDI: ${tech.controller}\nDecks: ${tech.decks}` + (tech.perf ? '\n' + perfText(tech.perf).join('\n') : '');
+    p.system = `Versión: ${tech.version}\nSistema: ${tech.os}\nControladora MIDI: ${tech.controller}\nControladoras conectadas: ${controllersText(tech.controllers)}\nDecks: ${tech.decks}` + (tech.perf ? '\n' + perfText(tech.perf).join('\n') : '');
     p.errors = tech.log.join('\n');
   }
   return p;
@@ -129,4 +154,4 @@ function mailtoUrl({ kind, text, email, file }) {
   return 'mailto:contacto@nexuraia.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 
-module.exports = { KINDS, LOG_LINES, windowsLabel, validEmail, technical, perfInfo, perfText, reportText, buildPayload, mailtoUrl };
+module.exports = { KINDS, LOG_LINES, PROFILE_TYPES, windowsLabel, validEmail, technical, controllersText, cleanUserController, perfInfo, perfText, reportText, buildPayload, mailtoUrl };

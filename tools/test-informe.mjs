@@ -68,6 +68,16 @@ const p2 = report.buildPayload({ kind: 'idea', text: 'Más efectos', email: 'dj@
 ok(p2.technical && p2.errors.split('\n').length === cases.length && p2.contact === 'dj@example.com', 'con registro: parte técnica + campos de la beta');
 ok(!JSON.stringify(p2).includes('Titanium') && !JSON.stringify(p2).includes('C:\\\\Users'), 'el JSON enviado no lleva canciones ni rutas');
 ok(report.windowsLabel('win32', '10.0.22631') === 'Windows 11' && report.windowsLabel('win32', '10.0.19045') === 'Windows 10', 'Windows 10/11 por número de compilación');
+// controladoras conectadas (puerto MIDI + tipo de perfil de una lista cerrada) y «¿Qué controladora usas?»
+const tc = report.technical({ version: '1', os: 'W', controller: 'DDJ-400', decks: 2, known, user: 'Miguel', home,
+  controllers: [{ port: 'DDJ-400', type: 'incluido', model: 'Pioneer DJ DDJ-400' }, { port: 'Mesa de Miguel', type: 'hackeado', model: 'x' }, { port: '' }] });
+ok(tc.controllers.length === 2 && tc.controllers[0].type === 'incluido' && tc.controllers[1].type === 'ninguno' && !JSON.stringify(tc.controllers).includes('Miguel'), 'controladoras: tipo de perfil de la lista cerrada y nombre del usuario fuera del puerto');
+ok(report.controllersText(tc.controllers) === 'DDJ-400 (perfil incluido: Pioneer DJ DDJ-400) · Mesa de <usuario> (sin perfil)', 'texto de las controladoras conectadas');
+const p6 = report.buildPayload({ kind: 'idea', text: 'Más perfiles', email: '', userController: '  Numark Mixtrack Pro 3\n', attach: true, tech: tc, version: '1' });
+ok(p6.controllerUser === 'Numark Mixtrack Pro 3' && /— Controladora: Numark Mixtrack Pro 3$/.test(p6.message) && /Controladoras conectadas: DDJ-400 \(perfil incluido/.test(p6.system), '«¿Qué controladora usas?» va en el JSON y al final del mensaje; el sistema lista las conectadas');
+const p7 = report.buildPayload({ kind: 'idea', text: 'Hola', email: '', attach: false, tech: tc, version: '1' });
+ok(!('controllerUser' in p7) && p7.message === 'Hola', 'sin controladora escrita, el mensaje no cambia');
+ok(/Controladora \(según el usuario\): DDJ-FLX4/.test(report.reportText({ kind: 'idea', text: 'x', email: '', userController: 'DDJ-FLX4', tech: tc })), 'el .txt de respaldo lleva la controladora escrita');
 const mail = report.mailtoUrl({ kind: 'error', text: 'Hola', email: '', file: 'C:\\x\\informe.txt' });
 ok(mail.startsWith('mailto:contacto@nexuraia.com?subject=') && mail.length < 2000, 'mailto a contacto@nexuraia.com y corto');
 

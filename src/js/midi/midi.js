@@ -2,7 +2,7 @@
 // codificadores relativos universales, 14 bits, LEDs genéricos, monitor y perfiles
 import { Emitter, clamp } from '../util.js';
 import { MC4000Profile } from './mc4000.js';
-import { MidiProfileCatalog } from './profile-loader.js';
+import { MidiProfileCatalog, REF_TICKS_PER_REV } from './profile-loader.js';
 import { PAD_MODES, PAD_MODE_NAMES } from '../audio/deck.js';
 import { STEMS, STEM_PRESETS } from '../audio/stems.js';
 
@@ -56,8 +56,8 @@ export function guessRelEncoding(st) {
   return 'twos';
 }
 const rel = REL_DECODERS.twos;
-// Pasos del jog de la MC4000 por vuelta: escala de referencia del motor de scratch
-export const REF_TICKS_PER_REV = 605;
+// Pasos del jog de la MC4000 por vuelta: escala de referencia del motor de scratch (en profile-loader.js)
+export { REF_TICKS_PER_REV };
 
 // Perfil de dispositivo guardado en settings.midiProfiles[nombre]
 // { map: {clave: acción}, opts: {clave: {enc, inv, scale}}, leds: [{key, action, on, off}], ledsOff }
@@ -227,15 +227,16 @@ export class MidiManager extends Emitter {
   static INIT_TIMEOUT_MS = 5000;
   static RETRY_MS = 20000;
 
-  // Con algunas controladoras (p. ej. la MC4000 recién conectada o abierta en otro programa) el navegador
+  // Con cualquier controladora (recién conectada o abierta en otro programa; se vio con la MC4000) el navegador
   // puede tardar mucho en responder a requestMIDIAccess, o no responder nunca. El arranque de la app no espera
   // a MIDI (app.start) y aquí se espera como mucho INIT_TIMEOUT_MS: después status = 'timeout' (evento
   // 'status'; la app avisa con «Reintentar») y se sigue intentando cada RETRY_MS. Si la respuesta llega tarde se
   // acepta igual. Estados: init → waiting → ok | denied | unsupported | timeout
   async init() {
     // los perfiles JSON no deben retrasar la conexión: si llegan después, se vuelve a mirar los dispositivos
+    // (y entonces se avisa de lo detectado: hasta tener el catálogo no se sabe si hay perfil)
     this.catalogReady = this.catalog.load().catch(e => console.warn('No se pudieron cargar perfiles MIDI JSON', e));
-    this.catalogReady.then(() => { if (this.access) this.scan(); });
+    this.catalogReady.then(() => { this.catalogLoaded = true; if (this.access) this.scan(); });
     this.timeouts = 0;
     return this.connect();
   }
@@ -304,6 +305,43 @@ export class MidiManager extends Emitter {
   }
 
   isNative(name) { return MC4000Profile.match(name); }
+
+  // Perfil incluido elegido a mano en Ajustes → MIDI (settings.midiBuiltIn[nombre] = id | 'none'); si no, el
+  // que reconoce el nombre del puerto
+  builtInFor(name) {
+    const pick = (this.app.settings.midiBuiltIn || {})[name];
+    if (pick === 'none') return null;
+    return (pick && this.catalog.byId(pick)) || this.catalog.match(name);
+  }
+  setBuiltIn(name, id) {
+    const all = { ...(this.app.settings.midiBuiltIn || {}) };
+    if (id) all[name] = id; else delete all[name];
+    this.app.setSetting('midiBuiltIn', all);
+    for (const ds of this.devState.values()) if (ds.name === name) { ds.builtIn = ds.native ? null : this.builtInFor(name); ds.ledList = null; ds.ledCache.clear(); }
+    this.emit('profile', name);
+    this.emit('devices');
+  }
+
+  // Qué perfil usa un dispositivo: type = incluido | asistente | importado | ninguno (lista cerrada: va al
+  // diagnóstico del informe de errores), label = texto para la interfaz, custom = controles propios del usuario
+  profileInfo(name) {
+    const prof = this.getProfile(name), custom = Object.keys(prof.map).length;
+    if (this.isNative(name)) return { type: 'incluido', label: 'perfil incluido (nativo, con LEDs y vúmetros)', model: 'Denon DJ MC4000', custom };
+    const b = this.builtInFor(name);
+    if (b) return { type: 'incluido', label: `perfil incluido: ${b.name}`, model: b.name, id: b.id, custom };
+    if (custom) {
+      const src = prof.source;
+      if (src === 'mixxx') return { type: 'importado', label: 'mapeo de Mixxx importado', custom };
+      if (src === 'json') return { type: 'importado', label: 'perfil JSON importado', custom };
+      return { type: 'asistente', label: src === 'asistente' ? 'configurada con el asistente' : 'configurada con MIDI Learn', custom };
+    }
+    const fam = this.catalog.genericMatch(name);
+    return { type: 'ninguno', label: 'sin perfil', family: fam ? fam.manufacturer || fam.name : '', custom: 0 };
+  }
+  // Para el diagnóstico: [{ port, type }] de las controladoras conectadas
+  get controllerSummary() {
+    return this.connectedNames.map(n => ({ port: n, type: this.profileInfo(n).type, model: this.profileInfo(n).model || '' }));
+  }
   get connectedNames() { return this.devices.filter(d => d.state === 'connected').map(d => d.name); }
   // Dispositivos configurables (todos menos los que solo tienen perfil nativo, que también admiten ajustes)
   get configurableNames() { return this.connectedNames; }
@@ -327,21 +365,29 @@ export class MidiManager extends Emitter {
         const prof = old || new MC4000Profile(this.app, this, input, out);
         if (old) prof.output = out;
         this.profiles.push(prof);
-        if (!old) { prof.init(); this.app.toast(`${input.name} conectada`, 'ok'); }
+        if (!old) prof.init();
       }
       let ds = this.devState.get(input.id);
       if (ds && ds.name !== input.name) ds = null; // otro dispositivo con el mismo id
-      const isNew = !ds;
-      if (!ds) ds = { id: input.id, name: input.name, stats: {}, msb: {}, lsb: {}, hires: new Set(), ledCache: new Map(), ledList: null };
+      if (!ds) ds = { id: input.id, name: input.name, stats: {}, msb: {}, lsb: {}, hires: new Set(), ledCache: new Map(), ledList: null, vuLast: 0 };
       ds.native = native;
-      ds.builtIn = native ? null : (this.catalog.match(input.name) || this.catalog.genericMatch(input.name));
+      ds.builtIn = native ? null : this.builtInFor(input.name);
       ds.prof = this.getProfile(input.name);
       ds.output = native ? null : findOutputFor(outputs, input.name);
       ds.ledList = null; ds.ledCache.clear();
       this.devState.set(input.id, ds);
-      if (isNew && !native && this.app.toast) {
-        const n = Object.keys(ds.prof.map).length;
-        this.app.toast(n ? `${input.name} conectada · ${n} controles configurados` : `${input.name} conectada · configúrala en Ajustes → MIDI («Añadir controladora»)`, n ? 'ok' : 'info', 6000);
+      // mensajes de inicio del perfil incluido (los SysEx solo si el navegador ha dado permiso)
+      if (ds.builtIn && ds.output && ds.initFor !== ds.builtIn.id) {
+        ds.initFor = ds.builtIn.id;
+        for (const msg of ds.builtIn.init || []) {
+          if (msg[0] === 0xF0 && !this.access.sysexEnabled) continue;
+          try { ds.output.send(msg); } catch (_) { /* puerto cerrado */ }
+        }
+      }
+      // aviso al conectar (una vez por conexión), cuando ya se sabe si hay perfil: lo muestra la app
+      if (!ds.announced && (this.catalogLoaded || native)) {
+        ds.announced = true;
+        this.emit('detected', { name: input.name, info: this.profileInfo(input.name) });
       }
     }
     this.emit('devices');
@@ -473,7 +519,7 @@ export class MidiManager extends Emitter {
     const g = this.map[key];
     if (g && this.actions[g]) return { id: g, opt: {} };
     if (ds && ds.builtIn) {
-      const m = ds.builtIn.mappings.find(x => x.key === key);
+      const m = ds.builtIn.byKey ? ds.builtIn.byKey.get(key) : ds.builtIn.mappings.find(x => x.key === key);
       if (m && this.actions[m.action]) return { id: m.action, opt: { enc: m.enc, inv: m.inv, scale: m.scale } };
     }
     return null;
@@ -568,7 +614,8 @@ export class MidiManager extends Emitter {
 
   // ---------------------------------------------------------------- LEDs genéricos
   // Se encienden con el mismo número MIDI que el botón (nota → nota, CC → CC), valor 127/0.
-  // Los perfiles importados (Mixxx) pueden traer su lista propia de LEDs y valores.
+  // Los perfiles importados (Mixxx) pueden traer su lista propia de LEDs y valores; los incluidos, los LEDs
+  // que documenta el fabricante (si el usuario reasigna ese botón, manda su asignación).
   buildLedList(ds) {
     if (ds.prof.ledsOff) return [];
     const list = [], seen = new Set();
@@ -580,7 +627,22 @@ export class MidiManager extends Emitter {
     };
     for (const l of ds.prof.leds) push(l.key, l.action, l.on ?? 0x7F, l.off ?? 0);
     for (const [k, a] of Object.entries(ds.prof.map)) if (this.actions[a]?.kind === 'button') push(k, a);
+    if (ds.builtIn) for (const l of ds.builtIn.leds || []) if (!ds.prof.map[l.key]) push(l.key, l.action, l.on, l.off);
     return list;
+  }
+
+  // Vúmetros de un perfil incluido: nivel de pico de la app (app.lastMeters) en la escala del fabricante
+  static vuValue(p, min = 0, max = 0x7F) {
+    const m = Math.min(1, Math.max(0, (20 * Math.log10(Math.max(p || 0, 1e-6)) + 48) / 51)); // −48…+3 dB, como el mezclador
+    return Math.round(min + m * (max - min));
+  }
+  vuLevel(source, meters) {
+    if (!meters) return 0;
+    if (source === 'masterL') return meters.L;
+    if (source === 'masterR') return meters.R;
+    if (source === 'master') return Math.max(meters.L || 0, meters.R || 0);
+    const i = +source.slice(4) - 1;
+    return (meters.ch || [])[i] || 0;
   }
 
   frame() {
@@ -591,13 +653,25 @@ export class MidiManager extends Emitter {
     for (const ds of this.devState.values()) {
       if (ds.native || !ds.output) continue;
       const list = ds.ledList || (ds.ledList = this.buildLedList(ds));
+      const send = (st, d1, v) => {
+        const k = (st << 8) | d1;
+        if (ds.ledCache.get(k) === v) return;
+        ds.ledCache.set(k, v);
+        try { ds.output.send([st, d1, v]); } catch (_) { /* puerto cerrado */ }
+      };
       for (const l of list) {
         let on = false;
         try { on = !!this.actions[l.action].led(); } catch (_) {}
-        const v = on ? l.on : l.off, k = (l.st << 8) | l.d1;
-        if (ds.ledCache.get(k) === v) continue;
-        ds.ledCache.set(k, v);
-        try { ds.output.send([l.st, l.d1, v]); } catch (_) { /* puerto cerrado */ }
+        send(l.st, l.d1, on ? l.on : l.off);
+      }
+      // vúmetros (~12 Hz: los LEDs ya se refrescan cada 40 ms; basta uno de cada dos)
+      const vu = !ds.prof.ledsOff && ds.builtIn && ds.builtIn.vu;
+      if (vu && vu.length && now - (ds.vuLast || 0) > 75) {
+        ds.vuLast = now;
+        for (const v of vu) {
+          const k = parseKey(v.key);
+          send((k.type === 'n' ? 0x90 : 0xB0) | k.ch, k.num, MidiManager.vuValue(this.vuLevel(v.source, this.app.lastMeters), v.min, v.max));
+        }
       }
     }
   }

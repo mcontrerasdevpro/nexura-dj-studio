@@ -1,0 +1,48 @@
+{
+  "//": "Perfil hecho a partir del «MIDI Map» oficial de Reloop (ver «source»). No contiene código ni mapeos de otros programas.",
+  "id": "reloop-mixtour",
+  "name": "Reloop Mixtour",
+  "manufacturer": "Reloop",
+  "models": ["Mixtour"],
+  "match": ["Mixtour(?! ?Pro)"],
+  "source": "https://www.reloop.com/media/custom/upload/Reloop-Mixtour_MIDI-Map.pdf",
+  "sourceTitle": "MIXTOUR MIDI MAP",
+  "decks": 2,
+  "init": [[240,38,45,101,34,247]],
+  "mappings": [
+    {"key":"c0:0","action":"deck1.trim","kind":"abs"},
+    {"key":"c0:1","action":"deck1.high","kind":"abs"},
+    {"key":"c0:2","action":"deck1.mid","kind":"abs"},
+    {"key":"c0:3","action":"deck1.low","kind":"abs"},
+    {"key":"c0:4","action":"deck1.filter","kind":"abs"},
+    {"key":"c0:5","action":"deck1.fader","kind":"abs"},
+    {"key":"n0:2","action":"deck1.load"},
+    {"key":"n0:3","action":"deck1.pfl"},
+    {"key":"c1:0","action":"deck2.trim","kind":"abs"},
+    {"key":"c1:1","action":"deck2.high","kind":"abs"},
+    {"key":"c1:2","action":"deck2.mid","kind":"abs"},
+    {"key":"c1:3","action":"deck2.low","kind":"abs"},
+    {"key":"c1:4","action":"deck2.filter","kind":"abs"},
+    {"key":"c1:5","action":"deck2.fader","kind":"abs"},
+    {"key":"n1:2","action":"deck2.load"},
+    {"key":"n1:3","action":"deck2.pfl"},
+    {"key":"c0:8","action":"xfader","kind":"abs"},
+    {"key":"c0:7","action":"browse","kind":"rel"},
+    {"key":"n0:7","action":"browsepush"},
+    {"key":"n0:8","action":"back"}
+  ],
+  "leds": [
+    {"key":"n0:3","action":"deck1.pfl"},
+    {"key":"n1:3","action":"deck2.pfl"}
+  ],
+  "vu": [
+    {"key":"n0:18","source":"masterL"},
+    {"key":"n1:18","source":"masterR"}
+  ],
+  "missing": [
+    "PLAY, SYNC, CUE de deck, jog, pitch, loops y pads: la tabla no dice qué mensaje envía cada uno (los botones 1-4 del modo C no tienen función fija): asígnalos con el asistente.",
+    "Codificación del encoder TRAX: solo dice «relative CC»; Nexura la deduce al girarlo.",
+    "Master y auriculares (canal 5) envían MIDI, pero no se asignan: actúan por hardware.",
+    "Nombre del puerto MIDI: no documentado."
+  ]
+}

@@ -1328,9 +1328,10 @@ function registerIpc() {
   ipcMain.handle('backup:openFolder', async () => { await fsp.mkdir(copiasDir(), { recursive: true }); return shell.openPath(copiasDir()); });
 
   // ---- Informe de errores y sugerencias (main/report.js)
-  // info: { kind, text, email, attach, controller, decks, known: [títulos/artistas/archivos a ocultar] }
+  // info: { kind, text, email, userController, attach, controller, controllers: [{ port, type, model }], decks,
+  //         known: [títulos/artistas/archivos a ocultar] }
   const techFor = async (info) => report.technical({
-    version: app.getVersion(), os: `${OS_LABEL} (${os.release()}, ${os.arch()})`, controller: info.controller, decks: info.decks,
+    version: app.getVersion(), os: `${OS_LABEL} (${os.release()}, ${os.arch()})`, controller: info.controller, controllers: info.controllers, decks: info.decks,
     log: logger ? logger.tail(report.LOG_LINES) : [], known: info.known, user: os.userInfo().username, home: os.homedir(),
     perf: { system: await systemPerf(), app: info.perf }
   });
@@ -1344,7 +1345,7 @@ function registerIpc() {
       return { ok: !!(r && r.ok) };
     }
     const tech = info.attach ? await techFor(info) : null;
-    const payload = report.buildPayload({ kind: info.kind, text: info.text, email: info.email, attach: !!info.attach, tech, version: app.getVersion() });
+    const payload = report.buildPayload({ kind: info.kind, text: info.text, email: info.email, userController: info.userController, attach: !!info.attach, tech, version: app.getVersion() });
     if (FEEDBACK_URL) {
       try {
         const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
@@ -1357,7 +1358,7 @@ function registerIpc() {
     // alternativa: guardar el informe en un .txt y abrir el correo con el texto
     await fsp.mkdir(reportsDir(), { recursive: true });
     const file = path.join(reportsDir(), `informe-${backup.folderName(new Date())}.txt`);
-    const txt = report.reportText({ kind: payload.type, text: payload.message, email: payload.email, tech }).replace(/\n/g, '\r\n');
+    const txt = report.reportText({ kind: payload.type, text: info.text, email: payload.email, userController: payload.controllerUser, tech }).replace(/\n/g, '\r\n');
     await fsp.writeFile(file, '﻿' + txt);
     shell.openExternal(report.mailtoUrl({ kind: payload.type, text: payload.message, email: payload.email, file: tech ? file : '' })).catch(() => {});
     if (tech) shell.showItemInFolder(file);

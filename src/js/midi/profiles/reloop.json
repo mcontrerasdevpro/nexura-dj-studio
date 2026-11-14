@@ -1,9 +1,14 @@
 {
-  "id": "reloop-generic",
-  "name": "Reloop (genérico)",
-  "match": ["Reloop", "Mixtour"],
-  "manufacturer": "Reloop",
-  "version": 1,
-  "mappings": [],
-  "note": "Plantilla deliberadamente vacía: configura y valida el mapeo con MIDI Learn para cada modelo."
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "reloop-generic",
+ "name": "Reloop (otros modelos)",
+ "manufacturer": "Reloop",
+ "generic": true,
+ "match": [
+  "Reloop",
+  "Mixtour",
+  "Mixon"
+ ],
+ "mappings": [],
+ "note": "Modelos sin «MIDI Map» oficial (p. ej. Mixtour Pro, Ready, Buddy): usa el asistente o importa un mapeo de Mixxx."
 }

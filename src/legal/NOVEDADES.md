@@ -14,8 +14,14 @@
 - Nuevo ajuste **«Densidad de la biblioteca»** en **Ajustes → Biblioteca**: **Normal** (la de siempre), **Compacta** (filas finas de 23 px y letra de 13 px) o **Automática**, que usa la Compacta en la vista Biblioteca y la Normal en la vista Mezcla.
 - Con la densidad Compacta, el **árbol de crates también se aprieta**: filas finas, iconos pequeños y subcrates sangrados, para ver muchas más crates sin hacer scroll.
 
+### Funciona con más controladoras
+- **Se reconocen y se configuran solas** nuevas controladoras, además de la Denon DJ MC4000: **Pioneer DJ DDJ-400, DDJ-FLX4 y DDJ-SB3**, **Hercules DJControl Inpulse 200, 300 y 500** y **Reloop Mixtour y Mixon 4**. Los perfiles están hechos con la documentación MIDI oficial de cada fabricante e incluyen LEDs y vúmetros donde el fabricante los documenta.
+- Al conectar una controladora, la app te dice **«Controladora X detectada: perfil cargado»**. Si es un modelo sin perfil, te ofrece **configurarla con el asistente**, **importar un mapeo de Mixxx** (con un enlace a su lista oficial de controladoras) o **«Ahora no»**, y no vuelve a insistir con esa controladora.
+- En **Ajustes → MIDI** ves cada controladora conectada con el perfil que usa (incluido, asistente, importado o ninguno), puedes cambiarlo o reconfigurarla, y tienes la lista de modelos con perfil incluido.
+- El **informe de errores** indica qué controladora tienes conectada y con qué tipo de perfil, y el formulario de sugerencias tiene un campo opcional **«¿Qué controladora usas?»**.
+
 ### Arranque sin esperar a la controladora
-- Arreglado: a veces, con la controladora conectada, la app arrancaba pero **la forma de onda, los relojes y los vúmetros se quedaban quietos** aunque la música sonara, y el teclado no respondía. Pasaba cuando Windows tardaba en contestar por la controladora y la app se quedaba esperándolo.
+- Arreglado: a veces, con cualquier controladora conectada, la app arrancaba pero **la forma de onda, los relojes y los vúmetros se quedaban quietos** aunque la música sonara, y el teclado no respondía. Pasaba cuando Windows tardaba en contestar por la controladora y la app se quedaba esperándolo.
 - Ahora la app **arranca siempre sin esperar a la controladora**. Si no responde en 5 segundos, verás un aviso discreto, **«La controladora no responde; reconéctala o pulsa Reintentar»**, con su botón **Reintentar**. La app lo sigue intentando sola y, en cuanto responde, la controladora funciona.
 
 ### Panel Archivos

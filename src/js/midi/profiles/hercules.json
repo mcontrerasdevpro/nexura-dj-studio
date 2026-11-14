@@ -1,9 +1,13 @@
 {
-  "id": "hercules-generic",
-  "name": "Hercules DJ (genérico)",
-  "match": ["Hercules.*DJ", "DJControl"],
-  "manufacturer": "Hercules",
-  "version": 1,
-  "mappings": [],
-  "note": "Plantilla deliberadamente vacía: crea mappings con MIDI Learn; jogs y LEDs pueden requerir configuración específica del modelo."
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "hercules-generic",
+ "name": "Hercules (otros modelos)",
+ "manufacturer": "Hercules",
+ "generic": true,
+ "match": [
+  "Hercules",
+  "DJControl"
+ ],
+ "mappings": [],
+ "note": "Modelos sin tabla MIDI oficial (p. ej. Inpulse 200/300 MK2): usa el asistente o importa un mapeo de Mixxx."
 }

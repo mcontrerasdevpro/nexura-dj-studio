@@ -1,0 +1,14 @@
+{
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "native-instruments-generic",
+ "name": "Native Instruments Traktor",
+ "manufacturer": "Native Instruments",
+ "generic": true,
+ "match": [
+  "Traktor",
+  "Kontrol S[0-9]",
+  "Native Instruments"
+ ],
+ "mappings": [],
+ "note": "Traktor Kontrol S2 MK3: tiene modo MIDI (mantén FLX al conectarla) pero NI no publica su tabla: configúrala con el asistente. S4 MK3: solo funciona por HID, no es compatible."
+}
