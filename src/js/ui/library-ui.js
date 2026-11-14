@@ -14,6 +14,15 @@ import { ENERGY_MODES } from '../ai/assistant.js';
 const GRID = 'var(--lib-cols)';
 const SIDE_MIN = 140, SIDE_MAX = 520;
 const ART_SIZES = { small: { row: 28, col: 30 }, medium: { row: 44, col: 46 } };
+// densidad Compacta (Ajustes → Biblioteca; por defecto en la vista Biblioteca): filas de 23 px y letra de 13 px
+const DENSE_ROW = 23, DENSE_ART = { small: { row: 23, col: 25 }, medium: { row: 40, col: 42 } };
+// Explorar: filtros en cascada género → BPM → artista sobre la vista abierta
+const EXPLORE = [
+  { k: 'genre', label: 'GÉNERO', of: (t) => (t.genre || '').trim() || '(sin género)' },
+  { k: 'bpm', label: 'BPM', of: (t) => { const b = Math.round(t.bpm || 0); if (!b) return '(sin BPM)'; const lo = Math.floor(b / 5) * 5; return `${lo}–${lo + 4}`; } },
+  { k: 'artist', label: 'ARTISTA', of: (t) => (t.artist || '').trim() || '(sin artista)' }
+];
+const EXPLORE_MAX = 400;
 // 1 h 05 min / 42 min
 const countLabel = (n, one = 'pista', many = 'pistas') => n === 1 ? '1 ' + one : `${n} ${many}`;
 const fmtTotal = (s) => { const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`; };
@@ -76,6 +85,7 @@ export class LibraryUI {
     this.focus = 'table';
     this.cols = [];
     this.rowH = 28;
+    this.explore = { on: false, genre: null, bpm: null, artist: null };
     this.missing = new Map();   // id → true (perdido) / false (existe); comprobado en esta sesión
     this.art = new Map();       // id → data: URL | null (sin carátula) | 'pending'
     this.checkMissingSoon = debounce(() => this.checkMissing(), 250);
@@ -86,7 +96,9 @@ export class LibraryUI {
     app.on('settings', (k) => {
       if (k === 'protectLibrary') this.refreshLock();
       if (k === 'libColsSame' || k === 'libArtSize') this.relayout();
+      if (k === 'libDensity') this.relayout(true);
       if (k === 'libRail') this.updateRail();
+      if (k === 'libView' || k === 'libHistOpen') this.refreshQuick();
     });
     // modo laptop (clase de body) → barra de iconos en «Automática»
     new MutationObserver(() => this.updateRail()).observe(document.body, { attributes: true, attributeFilter: ['class'] });
@@ -160,9 +172,27 @@ export class LibraryUI {
     this.menuBtn = btn('≡', { cls: 'small lib-menu-btn', title: 'Más acciones de la biblioteca' });
     this.menuBtn.setAttribute('aria-label', 'Más acciones de la biblioteca');
     this.menuBtn.addEventListener('click', (e) => { e.stopPropagation(); this.menuAt(this.menuBtn, this.libMenu()); });
+    // botones rápidos (vista Biblioteca): vistas que ya existen en el árbol, Explorar y añadir música
+    const qb = (label, ico, title, fn) => {
+      const b = el('button', { class: 'lib-qbtn', type: 'button', title, 'aria-label': label }, icon(ico, 13, ICON_COLOR[ico] || null, 2.2), el('span', { class: 'qb-l' }, label), el('small', { class: 'qb-n' }));
+      b.addEventListener('click', fn);
+      return b;
+    };
+    this.quickBtns = {
+      all: qb('Todas', 'lib', 'Todas las pistas', () => this.setView('all')),
+      prep: qb('Prepare', 'prep', 'Prepare: tu lista de preparación (arrastra pistas aquí o al nodo Prepare)', () => this.setView('prepare')),
+      hist: qb('Historial', 'hist', 'Historial: abre la última sesión (todas, en el árbol)', () => this.openLastSession()),
+      explore: qb('Explorar', 'smart', 'Explorar: filtra la vista abierta por género, BPM y artista', () => this.toggleExplore()),
+      add: qb('Añadir', 'plus', 'Añadir archivos o una carpeta de música', (e) => this.menuAt(e.currentTarget, [
+        { label: 'Archivos…', fn: () => this.app.addFiles(false) },
+        { label: 'Carpeta…', fn: () => this.app.addFiles(true) }
+      ]))
+    };
+    this.quickBtns.explore.setAttribute('aria-pressed', 'false');
+    this.quick = el('span', { class: 'lib-quick', role: 'group', 'aria-label': 'Accesos rápidos de la biblioteca' }, ...Object.values(this.quickBtns));
     const toolbar = el('div', { class: 'lib-toolbar' },
       this.sideToggle,
-      el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.aiMode, this.searchIn, this.lockBtn,
+      el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.quick, this.aiMode, this.searchIn, this.lockBtn,
       btn('✨ Pedir set', { cls: 'small ai-btn', title: 'Describe un set con tus palabras y la IA lo crea con tu música', onClick: () => this.app.aiPromptDialog() }),
       btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten (respeta tus BPM corregidos)' }),
       this.cleanBtn, this.menuBtn);
@@ -175,7 +205,8 @@ export class LibraryUI {
     this.scroller.addEventListener('scroll', () => this.renderRows());
     this.scroller.addEventListener('focus', () => { this.focus = 'table'; this.root.classList.remove('side-focus'); });
     this.empty = el('div', { class: 'lib-empty' });
-    const main = el('div', { class: 'lib-main' }, toolbar, this.head, this.scroller, this.empty);
+    this.explorePanel = el('div', { class: 'lib-explore', hidden: true, role: 'group', 'aria-label': 'Explorar por género, BPM y artista' });
+    const main = el('div', { class: 'lib-main' }, toolbar, this.explorePanel, this.head, this.scroller, this.empty);
     // tirador para el ancho de la barra lateral
     this.sideRs = el('div', { class: 'lib-side-rs', title: 'Arrastra para cambiar el ancho · doble clic: ancho por defecto' });
     this.root.append(this.rail, this.side, main, this.sideRs);
@@ -613,6 +644,8 @@ export class LibraryUI {
       const q = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
       this.rows = this.app.ai.suggest(80).filter(t => !q.length || q.every(tok => `${t.title} ${t.artist} ${t.genre} ${t.camelot} ${t.bpm ? Math.round(t.bpm) : ''}`.toLowerCase().includes(tok)));
     } else this.rows = this.lib.query(this.viewId, this.search, this.viewId.startsWith('history:') && !this.sort.field ? null : this.sort);
+    if (this.explore.on) this.rows = this.applyExplore(this.rows);
+    this.refreshQuick();
     if (keepId) this.cursor = this.rows.findIndex(r => r.id === keepId);
     // tras quitar pistas con Supr queda seleccionada la que ocupa ahora su lugar
     if (this.pendingSel != null) {
@@ -650,6 +683,70 @@ export class LibraryUI {
     this.renderRows();
   }
 
+  // ------------------------------------------------------------ accesos rápidos y Explorar
+  refreshQuick() {
+    if (!this.quickBtns) return;
+    const v = this.viewId, q = this.quickBtns;
+    q.all.classList.toggle('on', v === 'all');
+    q.prep.classList.toggle('on', v === 'prepare');
+    q.hist.classList.toggle('on', v.startsWith('history:'));
+    const n = this.lib.prepare.length;
+    q.prep.lastChild.textContent = n ? String(n) : '';
+    q.hist.disabled = !this.lib.history.length;
+    q.explore.classList.toggle('on', this.explore.on);
+    q.explore.setAttribute('aria-pressed', String(this.explore.on));
+  }
+  // Historial: la última sesión (las demás, en el árbol, que se despliega)
+  openLastSession() {
+    const h = this.lib.history[this.lib.history.length - 1];
+    if (!h) return this.app.toast('Todavía no hay sesiones en el historial', 'info');
+    if (!this.app.settings.libHistOpen) this.setHistOpen(true);
+    this.setView('history:' + h.id);
+  }
+  // al cerrarlo se quitan sus filtros (así no quedan pistas ocultas sin que se vea por qué)
+  toggleExplore(on = !this.explore.on) {
+    this.explore = on ? { ...this.explore, on } : { on: false, genre: null, bpm: null, artist: null };
+    this.explorePanel.hidden = !on;
+    this.refresh(true);
+  }
+  // Filtra en cascada (género → BPM → artista) y dibuja las tres listas con lo que queda en cada paso
+  applyExplore(rows) {
+    const x = this.explore, cols = [];
+    let cur = rows;
+    for (const f of EXPLORE) {
+      const counts = new Map();
+      for (const t of cur) { const k = f.of(t); counts.set(k, (counts.get(k) || 0) + 1); }
+      // lo elegido sigue en la lista aunque ya no tenga pistas (para poder quitarlo)
+      if (x[f.k] != null && !counts.has(x[f.k])) counts.set(x[f.k], 0);
+      cols.push({ f, total: cur.length, counts });
+      if (x[f.k] != null) cur = cur.filter(t => f.of(t) === x[f.k]);
+    }
+    this.renderExplore(cols);
+    return cur;
+  }
+  renderExplore(cols) {
+    const x = this.explore;
+    const item = (f, key, label, n) => {
+      const on = x[f.k] === key;
+      const b = el('button', { class: 'ex-item' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), title: label }, el('span', {}, label), el('small', {}, String(n)));
+      b.addEventListener('click', () => {
+        x[f.k] = on || key == null ? null : key;
+        // al cambiar un filtro se quitan los de después (género → BPM → artista)
+        for (const g of EXPLORE.slice(EXPLORE.indexOf(f) + 1)) x[g.k] = null;
+        this.refresh(true);
+      });
+      return b;
+    };
+    const top = [...this.explorePanel.querySelectorAll('.ex-list')].map(l => l.scrollTop);
+    this.explorePanel.replaceChildren(...cols.map(({ f, total, counts }, i) => {
+      const keys = [...counts.keys()].sort((a, b) => (f.k === 'bpm' ? (parseInt(a, 10) || 1e9) - (parseInt(b, 10) || 1e9) : a.localeCompare(b, 'es', { sensitivity: 'base' })));
+      const list = el('div', { class: 'ex-list' }, item(f, null, 'Todos', total), ...keys.slice(0, EXPLORE_MAX).map(k => item(f, k, k, counts.get(k))),
+        keys.length > EXPLORE_MAX ? el('p', { class: 'ex-more' }, `… y ${keys.length - EXPLORE_MAX} más (usa el buscador)`) : null);
+      requestAnimationFrame(() => { if (top[i]) list.scrollTop = top[i]; });
+      return el('div', { class: 'ex-col' }, el('div', { class: 'ex-head' }, f.label), list);
+    }), btn('✕', { cls: 'micro ex-close', title: 'Cerrar Explorar y quitar sus filtros', onClick: () => this.toggleExplore(false) }));
+  }
+
   activeKey() {
     const playing = this.app.decks.filter(d => d.track && d.playing);
     const d = playing.length ? playing[playing.length - 1] : this.app.decks.find(d => d.track);
@@ -672,13 +769,23 @@ export class LibraryUI {
     else this.app.setSetting('libCols', keys);
     this.relayout();
   }
-  // Cabecera y plantilla según las columnas visibles (al cambiarlas, de vista o de tamaño de pantalla)
-  relayout() {
+  // Densidad: Normal, Compacta o Automática (Compacta solo en la vista Biblioteca)
+  dense() {
+    const v = this.app.settings.libDensity || 'auto';
+    return v === 'compact' || (v === 'auto' && this.app.screenView === 'lib');
+  }
+  // Cabecera y plantilla según las columnas visibles (al cambiarlas, de vista, de densidad o de tamaño de
+  // pantalla). keepScroll: se conserva la primera fila visible aunque cambie la altura de las filas
+  relayout(keepScroll = false) {
+    const first = keepScroll && this.rowH ? this.scroller.scrollTop / this.rowH : 0;
+    const dense = this.dense();
+    this.root.classList.toggle('dense', dense);
     this._max = this.colMax();
     this.cols = visibleColumns(this.chosenCols(), this._max);
     const art = this.cols.some(c => c.key === 'art');
-    const size = ART_SIZES[this.app.settings.libArtSize] || ART_SIZES.small;
-    this.rowH = art ? size.row : 28;
+    const sizes = dense ? DENSE_ART : ART_SIZES;
+    const size = sizes[this.app.settings.libArtSize] || sizes.small;
+    this.rowH = art ? size.row : dense ? DENSE_ROW : 28;
     this.root.style.setProperty('--row-h', this.rowH + 'px');
     this.root.style.setProperty('--art-w', size.col + 'px');
     this.head.innerHTML = '';
@@ -696,6 +803,7 @@ export class LibraryUI {
     }
     this.applyColWidths();
     this.refresh();
+    if (keepScroll) this.scroller.scrollTop = Math.round(first * this.rowH);
   }
   columnsMenu(e) {
     const s = this.app.settings, chosen = new Set(visibleColumns(this.chosenCols()).map(c => c.key));

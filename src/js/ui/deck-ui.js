@@ -6,9 +6,12 @@ import { WaveDetail, WaveOverview, isShown } from './waveform.js';
 import { PlatterGesture, WheelSteps } from './jog-gesture.js';
 import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES } from '../audio/deck.js';
 import { STEMS } from '../audio/stems.js';
+import { peakToMeter } from '../audio/engine.js';
 
 // cambia el texto solo si es distinto (asignar el mismo texto también invalida la maquetación)
 const setText = (node, s) => { if (node._t !== s) { node._t = s; node.textContent = s; } };
+// tamaños de los loops rápidos de la vista Biblioteca (en beats)
+const QUICK_LOOPS = [1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 
 export class DeckUI {
   constructor(app, deck, root) {
@@ -188,7 +191,12 @@ export class DeckUI {
       el('span', { class: 'sep' }),
       this.gridUndoBtn);
 
-    const perfCol = el('div', { class: 'perf-col' }, perfRow, this.stemsRow, this.tabs, this.padsEl, this.padHint = el('div', { class: 'pad-hint hidden' }), loopRow, jumpRow, gridRow, this.gridEditRow, this.gridHereRow);
+    // loops rápidos (vista Biblioteca): un botón por tamaño; el mismo otra vez sale del loop
+    this.qloopBtns = QUICK_LOOPS.map(b => btn(fmtBeats(b), { cls: 'micro qloop', title: `Auto loop de ${fmtBeats(b)} beat${b > 1 ? 's' : ''}`, onClick: () => d.autoLoop(b) }));
+    this.qloops = el('div', { class: 'row qloops' },
+      btn('◀', { cls: 'micro', title: 'Loop ½', onClick: () => d.loopHalve() }), ...this.qloopBtns,
+      btn('▶', { cls: 'micro', title: 'Loop ×2', onClick: () => d.loopDouble() }));
+    const perfCol = el('div', { class: 'perf-col' }, perfRow, this.stemsRow, this.tabs, this.padsEl, this.padHint = el('div', { class: 'pad-hint hidden' }), this.qloops, loopRow, jumpRow, gridRow, this.gridEditRow, this.gridHereRow);
 
     this.flipSlot = el('select', { class: 'sel tiny-sel flip-slot', title: 'Ranura Flip (máximo 6)' },
       ...Array.from({ length: 6 }, (_, i) => el('option', { value: i }, `F${i + 1}`)));
@@ -212,7 +220,7 @@ export class DeckUI {
     perfCol.appendChild(flipRow);
 
     // --- pitch
-    this.rangeBtn = btn('±8%', { cls: 'small', onClick: () => d.cycleRange(), title: 'Rango del pitch' });
+    this.rangeBtn = btn('±8%', { cls: 'small range-btn', onClick: () => d.cycleRange(), title: 'Rango del pitch' });
     this.pitchFader = new Fader({ vertical: true, value: 0.5, def: 0.5, length: 196, notch: 0.5, cls: 'pitch', reversed: true,
       onChange: (v) => d.setPitchFader(v * 2 - 1) });
     this.pitchPct = el('div', { class: 'pitch-pct' }, '0.00%');
@@ -221,9 +229,11 @@ export class DeckUI {
       el('div', { class: 'bend' },
         btn('−', { cls: 'tiny', onDown: (e) => d.bendDown(-1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend −' }),
         btn('+', { cls: 'tiny', onDown: (e) => d.bendDown(1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend +' })),
-      btn('RESET', { cls: 'micro', onClick: () => { d.resetTempo(); this.pitchFader.set(0.5, true); } }));
+      btn('RESET', { cls: 'micro reset-btn', onClick: () => { d.resetTempo(); this.pitchFader.set(0.5, true); } }));
 
-    const body = el('div', { class: 'deck-body' }, pitchCol, platCol, perfCol);
+    // medidor de nivel vertical del canal (vista Biblioteca; lee los niveles que ya mide el mezclador)
+    this.meter = el('div', { class: 'meter deck-meter', title: 'Nivel del canal' }, el('div', { class: 'meter-fill' }));
+    const body = el('div', { class: 'deck-body' }, pitchCol, platCol, perfCol, this.meter);
     this.root.append(head, this.wavePanel, this.overviewPanel, body);
     this.waveDetail = new WaveDetail(this.detailCanvas, d, app);
     this.waveDetail.setWave(this.overview.wave);
@@ -370,6 +380,7 @@ export class DeckUI {
     this.jumpSize.textContent = fmtBeats(d.jumpBeats);
     this.autoBtn.classList.toggle('on', d.loop.on);
     this.reloopBtn.classList.toggle('on', d.loop.on);
+    this.qloopBtns.forEach((b, i) => b.classList.toggle('on', d.loop.on && Math.abs(d.loopBeats - QUICK_LOOPS[i]) < 1e-3));
     this.semisEl.textContent = (d.semis > 0 ? '+' : '') + d.semis;
     if (ev === 'tempo' && (!d.sync || d.isSyncMaster)) this.pitchFader.set((d.pitch + 1) / 2, true);
     this.refreshPads();
@@ -445,6 +456,14 @@ export class DeckUI {
     this.overview.draw();
     this.waveDetail.draw();
     this.drawPlatter(time);
+    if (this.app.screenView === 'lib') this.frameMeter();
+  }
+
+  // Vúmetro del deck (vista Biblioteca): como los del mezclador, recortando la barra (sin maquetación)
+  frameMeter() {
+    const p = this.app.lastMeters?.ch?.[this.deck.idx] || 0;
+    const v = Math.round(peakToMeter(p) * 100), f = this.meter.firstChild;
+    if (f._v !== v) { f._v = v; f.style.clipPath = `inset(${100 - v}% 0 0 0)`; }
   }
 
   // Medidor de fase: ±½ beat a lo ancho; verde = en fase (≤ 10 ms), ámbar = poco desfase, rojo = desfasado.
@@ -475,7 +494,9 @@ export class DeckUI {
     const accent = DECK_COLORS[d.idx];
     // el tema entra en la clave: al cambiarlo se redibuja (y el fondo se rehace con sus colores)
     const theme = `${TC['platter-in']}|${TC['platter-out']}|${TC['platter-hub']}|${accent}`;
-    const key = `${Math.round(time * 120)}|${d.currentBpm.toFixed(2)}|${d.tempo}|${d.scratching}|${d.vinyl}|${d.playing}|${d.duration}|${theme}`;
+    // vista Biblioteca: plato pequeño sin los textos del centro (los tiempos van encima, en texto de la página)
+    const lite = this.app.screenView === 'lib';
+    const key = `${Math.round(time * 120)}|${d.currentBpm.toFixed(2)}|${d.tempo}|${d.scratching}|${d.vinyl}|${d.playing}|${d.duration}|${theme}|${lite}`;
     if (key === this._platKey) return;
     this._platKey = key;
     const ctx = c.getContext('2d');
@@ -515,8 +536,9 @@ export class DeckUI {
     const cx = w / 2, cy = h / 2, ri = r * 0.66;
     ctx.fillStyle = TC['platter-hub'];
     ctx.beginPath(); ctx.arc(cx, cy, ri, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = accent; ctx.lineWidth = 2;
+    ctx.strokeStyle = accent; ctx.lineWidth = lite ? 4 : 2;
     ctx.beginPath(); ctx.arc(cx, cy, ri, 0, Math.PI * 2); ctx.stroke();
+    if (lite) return;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = TC['platter-label']; ctx.font = '700 17px Inter, sans-serif';
     ctx.fillText(`DECK ${d.idx + 1} · ${d.vinyl ? 'VINYL' : 'JOG'}`, cx, cy - ri * 0.62);

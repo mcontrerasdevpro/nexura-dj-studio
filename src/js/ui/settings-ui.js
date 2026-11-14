@@ -273,6 +273,8 @@ export class SettingsUI {
     p.append(
       el('h3', {}, 'Biblioteca'),
       this.row('Proteger biblioteca', this.toggle('protectLibrary'), 'No se pueden borrar ni renombrar pistas, crates ni smart crates, ni editar etiquetas, valoraciones, BPM o beatgrid, ni mover pistas entre crates. Sí se puede cargar, buscar, ordenar, analizar pistas nuevas y usar Prepare e Historial. También con el candado 🔒 de la biblioteca'),
+      this.row('Vista de la pantalla', select({ mix: 'Mezcla (decks y mezclador grandes)', lib: 'Biblioteca (decks compactos y más pistas a la vista)' }, app.screenView || 'mix', (v) => app.setScreenView(v)), 'También con el botón ▤ BIBLIOTECA de la barra superior o con F10. Al cambiar de vista no se corta nada: los decks siguen sonando'),
+      this.row('Densidad de la biblioteca', select({ auto: 'Automática (Compacta en la vista Biblioteca)', normal: 'Normal', compact: 'Compacta' }, s.libDensity || 'auto', (v) => app.setSetting('libDensity', v)), 'Compacta: filas finas de 23 px, letra de 13 px y el árbol de crates más apretado, para ver muchas más pistas a la vez'),
       this.row('Mismas columnas en todos los crates', this.toggle('libColsSame'), 'Si lo desactivas, cada crate recuerda sus columnas (clic derecho en la cabecera de la tabla para elegirlas)'),
       this.row('Tamaño de la carátula', select({ small: 'Pequeña', medium: 'Mediana' }, s.libArtSize || 'small', (v) => app.setSetting('libArtSize', v)), 'La columna «Carátula» está oculta por defecto'),
       this.row('Barra de iconos en la biblioteca', select({ auto: 'Automática', on: 'Siempre', off: 'Nunca' }, s.libRail || 'auto', (v) => app.setSetting('libRail', v)), 'Columna de iconos (Todas, IA, Prepare, Crates, Smart, YouTube, Spotify, Historial) junto al árbol. Automática: en modo laptop y con la ventana de 1100 px de ancho o menos. También con el botón pequeño junto al buscador de la barra lateral'),
@@ -594,7 +596,7 @@ export class SettingsUI {
       ['Quitar de la crate / de Prepare (en «Todas las pistas»: eliminar de la biblioteca)', 'Supr'], ['Eliminar de la biblioteca al instante, sin preguntar (pistas seleccionadas, desde cualquier vista; los archivos no se borran)', 'Ctrl + Supr'], ['Eliminar la lista de YouTube con el foco en la barra lateral (en «YouTube · todos los vídeos»: quitar todos los vídeos; pide confirmación)', 'Supr'], ['Deshacer lo último quitado o eliminado', 'Ctrl + Z'], ['Cargar en deck 1 / 2', 'Mayús + ← / Mayús + →'], ['Cambiar panel', 'Tab / ← / →'],
       ['Zoom de la forma de onda: acercar / alejar', '+ / − (también la rueda del ratón sobre la onda)'],
       ['Buscar', 'Ctrl + F'], ['Grabar', 'F9'], ['Pantalla completa', 'F11'], ['Herramientas de desarrollo', 'F12'],
-      ['Modo laptop', 'F8 (activar/desactivar)'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
+      ['Modo laptop', 'F8 (activar/desactivar)'], ['Vista Mezcla / Biblioteca', 'F10'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
       ['EQ kill', 'Clic derecho sobre HI/MID/LOW'], ['Ajuste fino de knobs/faders', 'Mayús + arrastrar'], ['Valor por defecto', 'Doble clic']
     ];
     p.append(el('h3', {}, 'Teclado y ratón'), el('table', { class: 'keys' }, ...rows.map(([a, b]) => el('tr', {}, el('td', {}, a), el('td', {}, el('kbd', {}, b))))));

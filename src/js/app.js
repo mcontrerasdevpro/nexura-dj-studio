@@ -43,6 +43,7 @@ import { Welcome } from './ui/welcome.js';
 import { LegalUI } from './ui/legal-ui.js';
 import { ReleaseNotes } from './ui/release-notes.js';
 import { CleanupUI } from './ui/cleanup-ui.js';
+import { RecStripUI } from './ui/rec-ui.js';
 import { applyTheme, themeId, DEFAULT_THEME } from './ui/theme.js';
 
 const DEFAULTS = {
@@ -61,7 +62,11 @@ const DEFAULTS = {
   // posición del cabezal en la onda de detalle (left 25 % | third 33 % | center 50 %) y sensibilidad del
   // plato y de la onda con el ratón (low | normal | high)
   playheadPos: 'left', platterSensitivity: 'normal',
-  panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
+  // vista de la pantalla: «mix» (Mezcla, la de siempre) o «lib» (Biblioteca: decks compactos arriba y la
+  // biblioteca ocupa el resto); densidad de la tabla: auto (Compacta solo en la vista Biblioteca) | normal | compact
+  screenView: 'mix', libDensity: 'auto',
+  // franjas plegables (fx y rec solo en la vista Biblioteca; el sampler, en las dos)
+  panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
 };
 
 // ArrayBuffer con solo los bytes del archivo para decodeAudioData (que lo vacía): sin copiar si ya lo es (lo
@@ -227,6 +232,9 @@ class App extends Emitter {
   buildUI() {
     const app = $('#app');
     document.body.classList.toggle('perf-mode', !!this.settings.perfMode);
+    // la vista se aplica antes de crear la biblioteca: su densidad depende de ella
+    this.screenView = this.settings.screenView === 'lib' ? 'lib' : 'mix';
+    document.body.classList.toggle('view-lib', this.screenView === 'lib');
     this.waveLayout = this.settings.waveLayout === 'deck' ? 'deck' : 'serato';
     this.waveLayoutToggle = $('#wave-layout-toggle');
     this.waveLayoutToggle?.querySelectorAll('[data-wave-layout]').forEach((button) => {
@@ -261,23 +269,38 @@ class App extends Emitter {
     this.feedbackBtn = btn('💬 SUGERENCIAS', { cls: 'small feedback-btn', title: 'Enviar un informe de error o una sugerencia a NexuraIA', onClick: () => this.feedback.open() });
     this.helpBtn = btn('?', { cls: 'small icon help-btn', title: 'Ayuda', onClick: (e) => this.helpMenu(e) });
     this.helpBtn.setAttribute('aria-label', 'Ayuda');
-    this.recBtn = btn('● REC', { cls: 'rec', onClick: () => this.toggleRecord(), title: 'Grabar la sesión (WAV)' });
+    // REC: en la vista Mezcla graba; en la vista Biblioteca abre o cierra la franja de grabación (que tiene
+    // su botón de grabar). F9 graba en las dos
+    this.recBtn = btn('● REC', { cls: 'rec', onClick: () => (this.screenView === 'lib' ? this.togglePanel('rec') : this.toggleRecord()), title: 'Grabar la sesión (WAV)' });
     this.recTime = el('span', { class: 'rec-time' }, '');
     this.midiStatus = el('span', { class: 'status-pill' }, 'MIDI');
     this.outStatus = el('span', { class: 'status-pill' }, 'AUDIO');
     this.clock = el('span', { class: 'clock' });
-    this.samplerToggle = btn('SAMPLER', { cls: 'small', onClick: () => this.togglePanel('sampler') });
+    this.samplerToggle = btn('SAMPLER', { cls: 'small sampler-toggle', title: 'Mostrar u ocultar el sampler', onClick: () => this.togglePanel('sampler') });
     this.laptopToggle = btn('LAPTOP', { cls: 'small', title: 'Alternar modo solo laptop (F8)', onClick: () => this.toggleLaptopMode() });
+    this.viewToggle = btn('▤ BIBLIOTECA', { cls: 'small view-toggle', title: 'Vista Biblioteca: decks compactos arriba y la biblioteca ocupa el resto de la pantalla (F10). Pulsa otra vez para volver a la vista Mezcla', onClick: () => this.toggleScreenView() });
+    this.viewToggle.setAttribute('aria-pressed', 'false');
+    // solo en la vista Biblioteca: franja de efectos y mezclador desplegable
+    this.fxToggle = btn('FX', { cls: 'small lib-only fx-toggle', title: 'Mostrar u ocultar la franja de efectos', onClick: () => this.togglePanel('fx') });
+    this.mixerToggle = btn('MIXER', { cls: 'small lib-only mixer-toggle', title: 'Mostrar u ocultar el mezclador (el sonido no cambia: solo se oculta en pantalla)', onClick: () => this.toggleMixer() });
+    this.recStrip = new RecStripUI(this, $('#recbar'));
+    for (const [id, name, label] of [['#fxbar', 'fx', 'efectos'], ['#sampler', 'sampler', 'sampler']]) {
+      const fold = btn('▲', { cls: 'micro strip-fold', title: `Cerrar la franja de ${label}`, onClick: () => this.togglePanel(name) });
+      fold.setAttribute('aria-label', `Cerrar la franja de ${label}`);
+      const box = $(id);
+      if (name === 'sampler') box.querySelector('.sampler-head')?.prepend(fold); else box.prepend(fold);
+    }
     this.automixBtn = btn('✨ AUTOMIX', { cls: 'small automix-btn', title: 'La IA pincha sola: elige la siguiente pista (Prepare o sugerencia), sincroniza y mezcla en el outro (F7)', onClick: () => this.automix.toggle() });
     this.automix.on('change', () => this.automixBtn.classList.toggle('on', this.automix.enabled));
     this.autoplayUI = new AutoplayUI(this);
-    $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
+    $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.viewToggle, this.mixerToggle, this.fxToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
       this.helpBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
     $('#wave-zoom').append(
       btn('−', { cls: 'micro', title: 'Alejar la forma de onda (tecla −)', onClick: () => this.zoomWaves(1.25) }),
       btn('+', { cls: 'micro', title: 'Acercar la forma de onda (tecla +)', onClick: () => this.zoomWaves(1 / 1.25) }));
     this.applyWaveZoom();
-    this.applyPanels();
+    this.setScreenView(this.screenView, false);
+    this.decks.forEach(d => d.on('track', () => this.updateWaveRows()));
     this.midiStatus.addEventListener('click', () => this.settingsUI.open('midi'));
     this.outStatus.addEventListener('click', () => this.settingsUI.open('audio'));
     document.addEventListener('click', () => this.engine.resume(), { once: true });
@@ -362,13 +385,53 @@ class App extends Emitter {
     this.applyPanels();
   }
   applyPanels() {
-    const p = this.settings.panels;
+    const p = this.settings.panels, lib = this.screenView === 'lib';
     $('#sampler').hidden = !p.sampler;
     this.samplerToggle.classList.toggle('on', !!p.sampler);
     document.body.classList.toggle('with-sampler', !!p.sampler);
+    // franjas de grabación y de efectos: plegables en la vista Biblioteca; en Mezcla, como siempre (sin
+    // franja de grabación y efectos debajo de los decks)
+    $('#recbar').hidden = !(lib && p.rec);
+    $('#fxbar').hidden = lib && !p.fx;
+    this.fxToggle.classList.toggle('on', lib && !!p.fx);
+    this.recBtn.classList.toggle('open', lib && !!p.rec);
+    this.recBtn.title = lib ? 'Mostrar u ocultar la franja de grabación (F9: grabar / parar)' : 'Grabar la sesión (WAV) · F9';
     const laptop = this.expansions?.enabled('laptop') || false;
     document.body.classList.toggle('laptop-mode', laptop);
     this.laptopToggle?.classList.toggle('on', laptop);
+  }
+
+  // ------------------------------------------------------------------ vista Mezcla / Biblioteca
+  // Solo cambia la disposición (clases de body y CSS): los decks, el audio y el estado siguen igual
+  toggleScreenView() { this.setScreenView(this.screenView === 'lib' ? 'mix' : 'lib'); }
+  setScreenView(mode, persist = true) {
+    const lib = mode === 'lib';
+    this.screenView = lib ? 'lib' : 'mix';
+    document.body.classList.toggle('view-lib', lib);
+    if (!lib) document.body.classList.remove('mixer-open');
+    this.viewToggle.classList.toggle('on', lib);
+    this.viewToggle.setAttribute('aria-pressed', String(lib));
+    this.mixerToggle.classList.toggle('on', document.body.classList.contains('mixer-open'));
+    if (persist) this.setSetting('screenView', this.screenView);
+    this.applyPanels();
+    this.updateWaveRows();
+    // la densidad de la tabla (Automática) y las columnas que caben dependen de la vista
+    this.libraryUI?.relayout(true);
+    this.deckUIs?.forEach(u => u.refresh('state'));
+    requestAnimationFrame(() => this.waves?.forEach(w => w.draw()));
+  }
+  // Mezclador en la vista Biblioteca: panel desplegable debajo de los decks (el sonido no cambia)
+  toggleMixer(open = !document.body.classList.contains('mixer-open')) {
+    if (this.screenView !== 'lib') return;
+    document.body.classList.toggle('mixer-open', open);
+    this.mixerToggle.classList.toggle('on', open);
+  }
+  // Vista Biblioteca: si solo hay un deck cargado, su forma de onda ocupa todo el centro
+  updateWaveRows() {
+    const shown = this.activeDecks, loaded = shown.filter(d => d.track);
+    const single = this.screenView === 'lib' && loaded.length === 1 && shown.length > 1;
+    this.decks.forEach((d, i) => $('#wave' + i)?.classList.toggle('wave-off', single && !d.track));
+    $('#waves').classList.toggle('single', single);
   }
 
   updateStatus() {
@@ -426,6 +489,7 @@ class App extends Emitter {
       if (this.automixBtn.textContent !== amLabel) this.automixBtn.textContent = amLabel;
       this.autoplayUI.frame();
       if (this.engine.recording) { const s = fmtTime((performance.now() - this.engine.recStart) / 1000, false); if (this.recTime.textContent !== s) this.recTime.textContent = s; }
+      if (this.screenView === 'lib') this.recStrip.frame(this.lastMeters);
     } catch (e) { console.error(e); }
   }
 
@@ -452,6 +516,7 @@ class App extends Emitter {
     for (const i of [2, 3]) { const w = $('#wave' + i); if (w) w.hidden = want !== 4; }
     this.applyLayers();
     if (this.mixerUI) this.mixerUI.setDeckCount(want);
+    if (this.viewToggle) this.updateWaveRows();
     this.emit('decks', want);
     if (prev !== want && this.engine.outputMode === 'external') this.applyOutputs(true);
     if (prev !== want) {
@@ -917,12 +982,16 @@ class App extends Emitter {
     } else {
       const wav = await this.engine.stopRecording();
       this.recTime.textContent = '';
-      const name = 'Nexura-set-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      // nombre de la mezcla (franja de grabación) + fecha y hora, para no sobrescribir una grabación anterior
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const name = (this.recStrip?.mixName() || 'Nexura-set') + '-' + stamp;
       const file = await platform.saveRecording(wav, name);
       toast('Grabación guardada: ' + file, 'ok', 7000);
+      this.lastRecording = file;
       if (isDesktop) platform.showItem(file);
     }
     this.updateStatus();
+    this.recStrip?.refresh();
   }
 
   // ------------------------------------------------------------------ IA
@@ -1226,6 +1295,7 @@ class App extends Emitter {
         case 'F9': this.toggleRecord(); break;
         case 'F6': this.engine.setSplit(!this.engine.split); break;
         case 'F8': this.toggleLaptopMode(); break;
+        case 'F10': this.toggleScreenView(); break;
         case 'F7': if (e.shiftKey) this.autoplay.toggle(); else this.automix.toggle(); break;
         // zoom de la forma de onda (en todos los decks o en el del último deck tocado, según Ajustes)
         case 'Equal': case 'NumpadAdd': this.zoomWaves(1 / 1.25); break;

@@ -1,5 +1,19 @@
 # Novedades de Nexura DJ Studio
 
+## Próxima versión · en preparación
+
+### Vista Biblioteca: más pistas a la vista
+- Nuevo botón **▤ BIBLIOTECA** en la barra superior (o la tecla **F10**): los decks se vuelven compactos arriba, con la **forma de onda grande en el centro**, y la biblioteca ocupa el resto de la pantalla. En una pantalla de 1920 × 1080 pasas de ver **8 pistas a ver 30**.
+- Cada deck compacto lleva lo que usas en cabina: título en una línea, tonalidad y BPM, plato pequeño con el **tiempo transcurrido y el restante**, los **8 pads** con sus modos, **loops rápidos de 1/8 a 16**, CUE, PLAY, SYNC, pitch y un **vúmetro** del canal.
+- **Cambiar de vista no corta nada**: los decks siguen sonando y todo queda como estaba. La app recuerda la vista que usabas.
+- El **mezclador** se oculta (lo llevas en la controladora) y aparece cuando lo necesitas con el botón **MIXER**. El sonido no cambia: solo se esconde en pantalla.
+- **Franjas plegables** entre los decks y la biblioteca: **grabación** (botón REC: grabar o parar, nombre de la mezcla, dónde se guarda, nivel y tiempo grabado), **efectos** (botón FX: las dos unidades con sus tres efectos, canal y beats) y **sampler**. Se cierran con su **▲** y se recuerda cuáles tenías abiertas.
+- Accesos rápidos encima de la tabla: **Todas, Prepare, Historial, Explorar y Añadir**. **Explorar** filtra la vista abierta por **género → BPM → artista** con un clic en cada columna.
+
+### Biblioteca compacta
+- Nuevo ajuste **«Densidad de la biblioteca»** en **Ajustes → Biblioteca**: **Normal** (la de siempre), **Compacta** (filas finas de 23 px y letra de 13 px) o **Automática**, que usa la Compacta en la vista Biblioteca y la Normal en la vista Mezcla.
+- Con la densidad Compacta, el **árbol de crates también se aprieta**: filas finas, iconos pequeños y subcrates sangrados, para ver muchas más crates sin hacer scroll.
+
 ## 1.0.0-rc.5 · noviembre de 2026
 
 ### Ves más de lo que viene
