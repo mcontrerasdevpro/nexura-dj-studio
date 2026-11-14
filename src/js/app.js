@@ -43,6 +43,7 @@ import { Welcome } from './ui/welcome.js';
 import { LegalUI } from './ui/legal-ui.js';
 import { ReleaseNotes } from './ui/release-notes.js';
 import { CleanupUI } from './ui/cleanup-ui.js';
+import { RecStripUI } from './ui/rec-ui.js';
 import { applyTheme, themeId, DEFAULT_THEME } from './ui/theme.js';
 
 const DEFAULTS = {
@@ -61,8 +62,20 @@ const DEFAULTS = {
   // posición del cabezal en la onda de detalle (left 25 % | third 33 % | center 50 %) y sensibilidad del
   // plato y de la onda con el ratón (low | normal | high)
   playheadPos: 'left', platterSensitivity: 'normal',
-  panels: { sampler: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 }
+  // vista de la pantalla: «mix» (Mezcla, la de siempre) o «lib» (Biblioteca: decks compactos arriba y la
+  // biblioteca ocupa el resto); densidad de la tabla: auto (Compacta solo en la vista Biblioteca) | normal | compact
+  screenView: 'mix', libDensity: 'auto',
+  // franjas plegables (fx y rec solo en la vista Biblioteca; el sampler, en las dos)
+  panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 },
+  // carpeta de grabación ('' = Música › Nexura DJ Studio › Grabaciones), campos del buscador (null = todos) y
+  // última carpeta abierta en el panel «Archivos»
+  recDir: '', searchFields: null, filesDir: ''
 };
+
+const countTracks = (n) => (n === 1 ? '1 pista' : `${n} pistas`);
+// Arranque: pasos que se vigilan (app.watchStep) y a partir de cuándo se anotan como lentos
+const STEP_WARN_MS = 5000;
+const STEP_NAMES = { settings: 'los ajustes', info: 'la información de la app', audio: 'el motor de audio', library: 'la biblioteca', outputs: 'las salidas de audio' };
 
 // ArrayBuffer con solo los bytes del archivo para decodeAudioData (que lo vacía): sin copiar si ya lo es (lo
 // normal con la lectura por fetch; copiar 60 MB en cada análisis cargaba la memoria y la recolección de basura)
@@ -84,22 +97,34 @@ class App extends Emitter {
     }), 800);
   }
 
+  // Arranque. Nada de lo que puede tardar sin control (MIDI, salidas de audio) se espera antes de enlazar el
+  // teclado y arrancar el bucle de dibujo: antes, si requestMIDIAccess no respondía (pasaba con la MC4000
+  // conectada), la interfaz se veía pero relojes, ondas y vúmetros se quedaban quietos y el teclado no iba.
+  // Lo que sí hay que esperar (ajustes, biblioteca, audio) se vigila: si tarda más de 5 s se anota en el
+  // registro técnico y en el diagnóstico de rendimiento (this.startup → perf-diag → informe)
   async start() {
-    const saved = await platform.storeGet('settings');
+    this.startup = { t0: performance.now(), slow: [], midi: 'init', midiMs: null, midiTimeouts: 0, outputs: 'init' };
+    const pending = [];   // avisos de antes de que exista el registro (ajustes e información de la app)
+    const saved = await this.watchStep('settings', platform.storeGet('settings'), pending);
     if (saved) this.settings = { ...DEFAULTS, ...saved, panels: { ...DEFAULTS.panels, ...(saved.panels || {}) } };
     this.settings.expansions = { ...DEFAULTS.expansions, ...(this.settings.expansions || {}) };
     this.settings.autoplay = autoplayOptions(this.settings.autoplay);
     this.settings.theme = applyTheme(this.settings.theme);
-    this.info = await platform.info();
+    // información de la app: si no llega en 5 s se sigue con lo mínimo y se completa cuando llegue
+    const infoP = platform.info();
+    const info = await Promise.race([infoP, new Promise(r => setTimeout(() => r(null), STEP_WARN_MS))]);
+    this.info = info || { version: '', name: 'Nexura DJ Studio', recordings: '' };
+    if (!info) { pending.push('info'); this.startup.slow.push({ step: 'info', ms: STEP_WARN_MS, done: false }); infoP.then(i => { if (i) Object.assign(this.info, i); }).catch(() => {}); }
     this.feedback = new Feedback(this);
     this.perfDiag = new PerfDiag(this);
     this.feedback.log('INFO', 'app', `Inicio de la interfaz · ${this.info.version} · ${navigator.language} · ${innerWidth}×${innerHeight} @${devicePixelRatio}`);
+    for (const s of pending) this.feedback.log('WARN', 'arranque', `El arranque ha esperado más de ${STEP_WARN_MS / 1000} s a ${STEP_NAMES[s] || s}`);
     this.legal = new LegalUI(this);
     this.notes = new ReleaseNotes(this);
     this.welcome = new Welcome(this);
     document.title = 'Nexura DJ Studio' + (this.info.isBeta ? ` ${this.info.version}` : '');
 
-    this.engine = await new AudioEngine().init({ latency: this.settings.latency });
+    this.engine = await this.watchStep('audio', new AudioEngine().init({ latency: this.settings.latency }));
     this.feedback.log('INFO', 'audio', `AudioContext ${this.engine.ctx.state} · ${this.engine.ctx.sampleRate} Hz · ${this.engine.ctx.destination.maxChannelCount} canales`);
     this.engine.ctx.addEventListener('statechange', () => this.feedback.log(this.engine.ctx.state === 'running' ? 'INFO' : 'WARN', 'audio', 'AudioContext ' + this.engine.ctx.state));
     this.engine.setXfCurve(this.settings.xfCurve);
@@ -108,7 +133,8 @@ class App extends Emitter {
     this.library.protected = !!this.settings.protectLibrary;
     this.library.subTracks = this.settings.crateSubTracks !== false;
     this.library.on('protected', (msg) => toast(msg, 'warn', 4500));
-    await this.library.load();
+    // la biblioteca sí se espera siempre (seguir sin ella y guardar encima la dejaría vacía)
+    await this.watchStep('library', this.library.load());
     this.ai = new Assistant(this);
     this.youtube = new YouTubeService(() => this.settings);
     this.spotify = new SpotifyService(() => this.settings);
@@ -137,14 +163,23 @@ class App extends Emitter {
       this.feedback.log('INFO', 'midi', `Dispositivos: ${this.midi.connectedNames.join(', ') || 'ninguno'} · controladora: ${this.midi.controllerName || 'ninguna'}`);
     });
     this.midi.on('profile', () => this.updateDeckMode());
-    await this.midi.init();
+    this.midi.on('detected', (d) => this.onControllerDetected(d));
+    this.midi.on('status', (s, prev) => this.onMidiStatus(s, prev));
+    // teclado y bucle de dibujo, ya: no dependen de MIDI ni de las salidas de audio
+    this.bindKeyboard();
+    requestAnimationFrame(() => this.frame());
+    // MIDI en paralelo, con tiempo máximo (midi.js); si no responde, aviso con «Reintentar»
+    this.midiReady = this.midi.init().catch(e => { console.error('midi', e); this.feedback.log('ERROR', 'midi', 'No se pudo iniciar MIDI: ' + ((e && e.message) || e)); });
     this.stems.refreshStatus().then(() => this.stems.syncBackground()).catch(e => console.warn('stems', e));
     this.library.on('change', () => this.stems.syncBackground());
     this.decks.forEach(d => d.on('track', () => this.stems.syncBackground()));
     this.updateDeckMode();
     setInterval(() => { if (this.pendingDeckMode) this.updateDeckMode(); }, 1000);
-    await this.applyOutputs(true);
-    this.bindKeyboard();
+    // salidas de audio: tampoco bloquean (elegir un dispositivo puede tardar si el controlador no responde)
+    this.outputsReady = this.watchStep('outputs', this.applyOutputs(true)).then(() => { this.startup.outputs = 'ok'; }, (e) => {
+      this.startup.outputs = 'error';
+      this.feedback.log('ERROR', 'audio', 'No se pudieron aplicar las salidas de audio: ' + ((e && e.message) || e));
+    });
     this.engine.on('mixer', () => this.saveMixerSoon());
     this.engine.on('xf', () => this.saveMixerSoon());
     this.engine.on('rec', () => this.updateStatus());
@@ -158,7 +193,7 @@ class App extends Emitter {
     setTimeout(() => { if (this.welcome.shouldShow()) this.welcome.open(); this.notes.check(); this.feedback.flushQueue(); }, 600);
     this.updatesUI = new UpdatesUI(this);
     this.statsTimer = setTimeout(() => this.sendStatsSoon(), 20000);
-    requestAnimationFrame(() => this.frame());
+    this.checkRecDir().then(() => this.recStrip?.refreshDir(false));
     // sync: maestro y corrección continua de tempo y fase (independiente del dibujo)
     setInterval(() => { try { this.syncMgr.tick(); } catch (e) { console.error('sync', e); } }, SYNC_TICK_MS);
     setInterval(() => this.automix.tick().catch(e => console.error('automix', e)), 100);
@@ -169,6 +204,97 @@ class App extends Emitter {
     this.flushAll = () => Promise.all([this.library.flush(), platform.storeSet('settings', this.settings)]);
     platform.onFlush(this.flushAll);
     window.addEventListener('beforeunload', () => { this.library.flush(); platform.storeSet('settings', this.settings); });
+  }
+
+  // Espera un paso del arranque y, si pasa de 5 s, lo anota (registro técnico y diagnóstico de rendimiento).
+  // pending: si todavía no existe el registro, el aviso se guarda ahí y se escribe en cuanto exista
+  async watchStep(step, promise, pending = null) {
+    const t0 = performance.now();
+    let entry = null;
+    const timer = setTimeout(() => {
+      entry = { step, ms: STEP_WARN_MS, done: false };
+      this.startup.slow.push(entry);
+      if (this.feedback) this.feedback.log('WARN', 'arranque', `El arranque lleva más de ${STEP_WARN_MS / 1000} s esperando a ${STEP_NAMES[step] || step}`);
+      else if (pending) pending.push(step);
+    }, STEP_WARN_MS);
+    try { return await promise; }
+    finally {
+      clearTimeout(timer);
+      if (entry) {
+        entry.ms = Math.round(performance.now() - t0); entry.done = true;
+        this.feedback?.log('INFO', 'arranque', `${STEP_NAMES[step] || step}: listo tras ${(entry.ms / 1000).toFixed(1)} s`);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ MIDI: aviso si la controladora no responde
+  onMidiStatus(s, prev) {
+    const m = this.midi, st = this.startup;
+    st.midi = s; st.midiMs = m.waitMs; st.midiTimeouts = m.timeouts;
+    if (s === 'timeout' && prev !== 'timeout') {
+      this.feedback.log('WARN', 'midi', `requestMIDIAccess no ha respondido en ${MidiManager.INIT_TIMEOUT_MS / 1000} s: la app sigue sin controladora y lo reintenta (intento ${m.timeouts})`);
+      this.showMidiNotice();
+    } else if (s === 'ok') {
+      if (prev === 'timeout') { this.feedback.log('INFO', 'midi', `MIDI ha respondido tarde (${((m.waitMs || 0) / 1000).toFixed(1)} s): controladora disponible`); toast('Controladora MIDI disponible', 'ok'); }
+      else this.feedback.log('INFO', 'midi', `MIDI listo en ${m.waitMs} ms`);
+      this.hideMidiNotice();
+    } else if (s === 'denied') {
+      this.feedback.log('WARN', 'midi', 'Acceso MIDI denegado');
+      this.hideMidiNotice();
+    }
+    this.updateStatus();
+  }
+  showMidiNotice() {
+    if (this.midiNotice) { this.midiNotice.hidden = false; return; }
+    const retry = btn('Reintentar', { cls: 'micro primary midi-retry', onClick: () => {
+      retry.disabled = true; retry.textContent = 'Reintentando…';
+      this.feedback.log('INFO', 'midi', 'Reintentar MIDI (botón del aviso)');
+      this.midi.retry().finally(() => { retry.disabled = false; retry.textContent = 'Reintentar'; });
+    } });
+    const close = btn('✕', { cls: 'micro', title: 'Ocultar el aviso (se sigue reintentando)', onClick: () => { this.midiNotice.hidden = true; } });
+    close.setAttribute('aria-label', 'Ocultar el aviso');
+    this.midiNotice = el('div', { class: 'midi-notice', role: 'status' }, el('span', {}, 'La controladora no responde; reconéctala o pulsa Reintentar'), retry, close);
+    document.body.appendChild(this.midiNotice);
+  }
+  hideMidiNotice() { if (this.midiNotice) { this.midiNotice.remove(); this.midiNotice = null; } }
+
+  // ------------------------------------------------------------------ MIDI: controladora conectada (al arrancar o en caliente)
+  // Con perfil (incluido, asistente o importado): aviso breve. Sin perfil: aviso con tres opciones (asistente,
+  // mapeo de Mixxx, «Ahora no»). «Ahora no» se recuerda por dispositivo (settings.midiDismissed) y el aviso se
+  // vuelve a abrir desde Ajustes → MIDI.
+  onControllerDetected({ name, info }) {
+    this.feedback.log('INFO', 'midi', `Controladora detectada: ${name} · perfil ${info.type}${info.model ? ` (${info.model})` : ''}${info.custom ? ` · ${info.custom} controles propios` : ''}`);
+    if (info.type === 'incluido') return toast(`Controladora ${info.model || name} detectada: perfil cargado`, 'ok', 5000);
+    if (info.type !== 'ninguno') return toast(`Controladora ${name} detectada: ${info.label} (${info.custom} controles)`, 'ok', 5000);
+    if ((this.settings.midiDismissed || []).includes(name)) return;
+    this.showControllerNotice(name);
+  }
+  showControllerNotice(name) {
+    this.ctlNotices = this.ctlNotices || new Map();
+    if (this.ctlNotices.has(name)) return;
+    const info = this.midi.profileInfo(name);
+    const close = () => { const n = this.ctlNotices.get(name); if (n) n.remove(); this.ctlNotices.delete(name); };
+    const later = btn('Ahora no', { cls: 'micro ctl-later', onClick: () => {
+      const list = new Set(this.settings.midiDismissed || []); list.add(name);
+      this.setSetting('midiDismissed', [...list]);
+      this.feedback.log('INFO', 'midi', `«Ahora no» para ${name}`);
+      close();
+    } });
+    const box = el('div', { class: 'ctl-notice', role: 'dialog', 'aria-label': 'Controladora nueva' },
+      el('div', { class: 'ctl-text' },
+        el('b', {}, `Controladora ${name} detectada`),
+        el('span', {}, `No hay un perfil incluido para este modelo${info.family ? ` (se reconoce la marca ${info.family})` : ''}. ¿Cómo quieres configurarla?`)),
+      el('div', { class: 'ctl-actions' },
+        btn('Configurar con el asistente', { cls: 'micro primary ctl-wizard', onClick: () => { close(); this.settingsUI.openWizard(name); } }),
+        btn('Importar un mapeo de Mixxx', { cls: 'micro ctl-mixxx', onClick: () => { close(); this.settingsUI.mixxxDialog(name); } }),
+        later));
+    this.ctlNotices.set(name, box);
+    document.body.appendChild(box);
+  }
+  // Ajustes → MIDI: volver a ofrecer las opciones a un dispositivo al que se dijo «Ahora no»
+  reopenControllerNotice(name) {
+    this.setSetting('midiDismissed', (this.settings.midiDismissed || []).filter(n => n !== name));
+    this.showControllerNotice(name);
   }
 
   // Contador anónimo (main/stats.js): solo si el usuario lo ha permitido y hay statsUrl; una vez al día
@@ -227,6 +353,9 @@ class App extends Emitter {
   buildUI() {
     const app = $('#app');
     document.body.classList.toggle('perf-mode', !!this.settings.perfMode);
+    // la vista se aplica antes de crear la biblioteca: su densidad depende de ella
+    this.screenView = this.settings.screenView === 'lib' ? 'lib' : 'mix';
+    document.body.classList.toggle('view-lib', this.screenView === 'lib');
     this.waveLayout = this.settings.waveLayout === 'deck' ? 'deck' : 'serato';
     this.waveLayoutToggle = $('#wave-layout-toggle');
     this.waveLayoutToggle?.querySelectorAll('[data-wave-layout]').forEach((button) => {
@@ -261,23 +390,38 @@ class App extends Emitter {
     this.feedbackBtn = btn('💬 SUGERENCIAS', { cls: 'small feedback-btn', title: 'Enviar un informe de error o una sugerencia a NexuraIA', onClick: () => this.feedback.open() });
     this.helpBtn = btn('?', { cls: 'small icon help-btn', title: 'Ayuda', onClick: (e) => this.helpMenu(e) });
     this.helpBtn.setAttribute('aria-label', 'Ayuda');
-    this.recBtn = btn('● REC', { cls: 'rec', onClick: () => this.toggleRecord(), title: 'Grabar la sesión (WAV)' });
+    // REC: en la vista Mezcla graba; en la vista Biblioteca abre o cierra la franja de grabación (que tiene
+    // su botón de grabar). F9 graba en las dos
+    this.recBtn = btn('● REC', { cls: 'rec', onClick: () => (this.screenView === 'lib' ? this.togglePanel('rec') : this.toggleRecord()), title: 'Grabar la sesión (WAV)' });
     this.recTime = el('span', { class: 'rec-time' }, '');
     this.midiStatus = el('span', { class: 'status-pill' }, 'MIDI');
     this.outStatus = el('span', { class: 'status-pill' }, 'AUDIO');
     this.clock = el('span', { class: 'clock' });
-    this.samplerToggle = btn('SAMPLER', { cls: 'small', onClick: () => this.togglePanel('sampler') });
+    this.samplerToggle = btn('SAMPLER', { cls: 'small sampler-toggle', title: 'Mostrar u ocultar el sampler', onClick: () => this.togglePanel('sampler') });
     this.laptopToggle = btn('LAPTOP', { cls: 'small', title: 'Alternar modo solo laptop (F8)', onClick: () => this.toggleLaptopMode() });
+    this.viewToggle = btn('▤ BIBLIOTECA', { cls: 'small view-toggle', title: 'Vista Biblioteca: decks compactos arriba y la biblioteca ocupa el resto de la pantalla (F10). Pulsa otra vez para volver a la vista Mezcla', onClick: () => this.toggleScreenView() });
+    this.viewToggle.setAttribute('aria-pressed', 'false');
+    // solo en la vista Biblioteca: franja de efectos y mezclador desplegable
+    this.fxToggle = btn('FX', { cls: 'small lib-only fx-toggle', title: 'Mostrar u ocultar la franja de efectos', onClick: () => this.togglePanel('fx') });
+    this.mixerToggle = btn('MIXER', { cls: 'small lib-only mixer-toggle', title: 'Mostrar u ocultar el mezclador (el sonido no cambia: solo se oculta en pantalla)', onClick: () => this.toggleMixer() });
+    this.recStrip = new RecStripUI(this, $('#recbar'));
+    for (const [id, name, label] of [['#fxbar', 'fx', 'efectos'], ['#sampler', 'sampler', 'sampler']]) {
+      const fold = btn('▲', { cls: 'micro strip-fold', title: `Cerrar la franja de ${label}`, onClick: () => this.togglePanel(name) });
+      fold.setAttribute('aria-label', `Cerrar la franja de ${label}`);
+      const box = $(id);
+      if (name === 'sampler') box.querySelector('.sampler-head')?.prepend(fold); else box.prepend(fold);
+    }
     this.automixBtn = btn('✨ AUTOMIX', { cls: 'small automix-btn', title: 'La IA pincha sola: elige la siguiente pista (Prepare o sugerencia), sincroniza y mezcla en el outro (F7)', onClick: () => this.automix.toggle() });
     this.automix.on('change', () => this.automixBtn.classList.toggle('on', this.automix.enabled));
     this.autoplayUI = new AutoplayUI(this);
-    $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
+    $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.viewToggle, this.mixerToggle, this.fxToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
       this.helpBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
     $('#wave-zoom').append(
       btn('−', { cls: 'micro', title: 'Alejar la forma de onda (tecla −)', onClick: () => this.zoomWaves(1.25) }),
       btn('+', { cls: 'micro', title: 'Acercar la forma de onda (tecla +)', onClick: () => this.zoomWaves(1 / 1.25) }));
     this.applyWaveZoom();
-    this.applyPanels();
+    this.setScreenView(this.screenView, false);
+    this.decks.forEach(d => d.on('track', () => this.updateWaveRows()));
     this.midiStatus.addEventListener('click', () => this.settingsUI.open('midi'));
     this.outStatus.addEventListener('click', () => this.settingsUI.open('audio'));
     document.addEventListener('click', () => this.engine.resume(), { once: true });
@@ -362,20 +506,63 @@ class App extends Emitter {
     this.applyPanels();
   }
   applyPanels() {
-    const p = this.settings.panels;
+    const p = this.settings.panels, lib = this.screenView === 'lib';
     $('#sampler').hidden = !p.sampler;
     this.samplerToggle.classList.toggle('on', !!p.sampler);
     document.body.classList.toggle('with-sampler', !!p.sampler);
+    // franjas de grabación y de efectos: plegables en la vista Biblioteca; en Mezcla, como siempre (sin
+    // franja de grabación y efectos debajo de los decks)
+    $('#recbar').hidden = !(lib && p.rec);
+    $('#fxbar').hidden = lib && !p.fx;
+    this.fxToggle.classList.toggle('on', lib && !!p.fx);
+    this.recBtn.classList.toggle('open', lib && !!p.rec);
+    this.recBtn.title = lib ? 'Mostrar u ocultar la franja de grabación (F9: grabar / parar)' : 'Grabar la sesión (WAV) · F9';
     const laptop = this.expansions?.enabled('laptop') || false;
     document.body.classList.toggle('laptop-mode', laptop);
     this.laptopToggle?.classList.toggle('on', laptop);
   }
 
+  // ------------------------------------------------------------------ vista Mezcla / Biblioteca
+  // Solo cambia la disposición (clases de body y CSS): los decks, el audio y el estado siguen igual
+  toggleScreenView() { this.setScreenView(this.screenView === 'lib' ? 'mix' : 'lib'); }
+  setScreenView(mode, persist = true) {
+    const lib = mode === 'lib';
+    this.screenView = lib ? 'lib' : 'mix';
+    document.body.classList.toggle('view-lib', lib);
+    if (!lib) document.body.classList.remove('mixer-open');
+    this.viewToggle.classList.toggle('on', lib);
+    this.viewToggle.setAttribute('aria-pressed', String(lib));
+    this.mixerToggle.classList.toggle('on', document.body.classList.contains('mixer-open'));
+    if (persist) this.setSetting('screenView', this.screenView);
+    this.applyPanels();
+    this.updateWaveRows();
+    // la densidad de la tabla (Automática) y las columnas que caben dependen de la vista
+    this.libraryUI?.relayout(true);
+    this.deckUIs?.forEach(u => u.refresh('state'));
+    requestAnimationFrame(() => this.waves?.forEach(w => w.draw()));
+  }
+  // Mezclador en la vista Biblioteca: panel desplegable debajo de los decks (el sonido no cambia)
+  toggleMixer(open = !document.body.classList.contains('mixer-open')) {
+    if (this.screenView !== 'lib') return;
+    document.body.classList.toggle('mixer-open', open);
+    this.mixerToggle.classList.toggle('on', open);
+  }
+  // Vista Biblioteca: si solo hay un deck cargado, su forma de onda ocupa todo el centro
+  updateWaveRows() {
+    const shown = this.activeDecks, loaded = shown.filter(d => d.track);
+    const single = this.screenView === 'lib' && loaded.length === 1 && shown.length > 1;
+    this.decks.forEach((d, i) => $('#wave' + i)?.classList.toggle('wave-off', single && !d.track));
+    $('#waves').classList.toggle('single', single);
+  }
+
   updateStatus() {
     if (!this.midiStatus) return;
     const name = this.midi ? this.midi.controllerName : '';
-    this.midiStatus.textContent = name ? '🎛 ' + name : (this.midi && this.midi.status === 'unsupported' ? 'MIDI no disponible' : 'Sin controlador');
+    const ms = this.midi ? this.midi.status : '';
+    this.midiStatus.textContent = name ? '🎛 ' + name : ms === 'unsupported' ? 'MIDI no disponible' : ms === 'timeout' ? 'MIDI no responde' : ms === 'waiting' || ms === 'init' ? 'MIDI…' : 'Sin controlador';
     this.midiStatus.classList.toggle('ok', !!name);
+    this.midiStatus.classList.toggle('warn', !name && ms === 'timeout');
+    this.midiStatus.title = !name && ms === 'timeout' ? 'La controladora no responde: reconéctala o pulsa «Reintentar» en el aviso (se reintenta solo cada 20 s)' : 'Ajustes → MIDI';
     const mode = this.engine.outputMode;
     this.outStatus.textContent = mode === '4ch' ? '🔊 4 CH' : mode === 'separate' ? '🔊 2 SALIDAS' : mode === 'external' ? '🔊 MESA EXTERNA' : '🔊 ESTÉREO';
     this.outStatus.title = this.outputDesc || '';
@@ -426,6 +613,7 @@ class App extends Emitter {
       if (this.automixBtn.textContent !== amLabel) this.automixBtn.textContent = amLabel;
       this.autoplayUI.frame();
       if (this.engine.recording) { const s = fmtTime((performance.now() - this.engine.recStart) / 1000, false); if (this.recTime.textContent !== s) this.recTime.textContent = s; }
+      if (this.screenView === 'lib') this.recStrip.frame(this.lastMeters);
     } catch (e) { console.error(e); }
   }
 
@@ -452,6 +640,7 @@ class App extends Emitter {
     for (const i of [2, 3]) { const w = $('#wave' + i); if (w) w.hidden = want !== 4; }
     this.applyLayers();
     if (this.mixerUI) this.mixerUI.setDeckCount(want);
+    if (this.viewToggle) this.updateWaveRows();
     this.emit('decks', want);
     if (prev !== want && this.engine.outputMode === 'external') this.applyOutputs(true);
     if (prev !== want) {
@@ -505,8 +694,32 @@ class App extends Emitter {
     return buf;
   }
 
+  // Archivo del disco (panel «Archivos»): si está en la biblioteca, se carga esa pista; si no, se carga como pista
+  // suelta, sin añadirla (library.looseTrack)
+  async loadFileToDeck(p, idx) {
+    let t = this.library.byPath(p);
+    if (!t) {
+      const [info] = await platform.infoForPaths([p]);
+      if (!info) { toast('No se pudo abrir el archivo: ' + p, 'error', 6000); return; }
+      t = this.library.looseTrack(info);
+    }
+    return this.loadToDeck(t.id, idx);
+  }
+  // Rutas de archivos (o carpetas) → a la biblioteca (y a la crate, si se indica). Devuelve las pistas
+  async addPaths(paths, crateId = null) {
+    const infos = await platform.infoForPaths(paths);
+    if (!infos.length) { toast('No se encontraron archivos de audio compatibles', 'warn'); return []; }
+    const before = new Set(this.library.tracks.keys());
+    const added = this.library.addFiles(infos, crateId);
+    const fresh = added.filter(t => !before.has(t.id));
+    toast(`${countTracks(added.length)} ${crateId ? `en «${this.libraryUI.crateLabel(this.library.crate(crateId))}»` : 'en la biblioteca'}${fresh.length && fresh.length < added.length ? ` (${fresh.length} nuevas)` : ''}`, 'ok');
+    const todo = fresh.filter(t => !t.analyzed);
+    if (todo.length && this.settings.autoAnalyze) this.analyzeMany(todo);
+    return added;
+  }
+
   async loadToDeck(id, idx) {
-    const t = this.library.get(id);
+    const t = this.library.getAny(id);
     const d = this.decks[idx];
     if (!t || !d) return;
     this.focusDeck(idx);
@@ -530,7 +743,7 @@ class App extends Emitter {
     catch (e) {
       const lost = (await platform.existsMany([t.path]))?.[0] === false;
       if (lost) this.libraryUI.markMissing(t.id, true);
-      this.feedback.log('WARN', 'audio', `No se pudo cargar en el deck ${idx + 1}: ${lost ? 'archivo perdido' : (e && e.message) || e} · ${t.path}`);
+      this.feedback.log('WARN', 'audio', `No se pudo cargar en el deck ${idx + 1}: ${lost ? 'archivo perdido' : (e && e.message) || e}${t.external ? ' (archivo del panel Archivos)' : ' · ' + t.path}`);
       toast(lost ? `Archivo perdido: ${t.path}. Clic derecho → «Relocalizar archivos perdidos…»` : `No se pudo abrir el archivo: ${t.path}`, 'error', 7000);
       return;
     }
@@ -917,12 +1130,47 @@ class App extends Emitter {
     } else {
       const wav = await this.engine.stopRecording();
       this.recTime.textContent = '';
-      const name = 'Nexura-set-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-      const file = await platform.saveRecording(wav, name);
-      toast('Grabación guardada: ' + file, 'ok', 7000);
+      // nombre de la mezcla (franja de grabación) + fecha y hora, para no sobrescribir una grabación anterior
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const name = (this.recStrip?.mixName() || 'Nexura-set') + '-' + stamp;
+      const { file, fallback } = await platform.saveRecording(wav, name, this.settings.recDir || '');
+      if (fallback) {
+        toast(`La carpeta de grabación elegida ${fallback === 'missing' ? 'ya no existe' : 'no admite escritura'}: la grabación se ha guardado en la de siempre (${file}). Cámbiala con «Cambiar…».`, 'warn', 12000,
+          { label: 'Cambiar…', fn: () => this.chooseRecDir() });
+        this.recDirProblem = fallback;
+      } else toast('Grabación guardada: ' + file, 'ok', 7000);
+      this.lastRecording = file;
       if (isDesktop) platform.showItem(file);
     }
     this.updateStatus();
+    this.recStrip?.refresh();
+  }
+  // Carpeta de grabación: la elegida (settings.recDir) o la de siempre (Música › Nexura DJ Studio › Grabaciones)
+  recFolder() { return this.settings.recDir || this.info.recordings || ''; }
+  async chooseRecDir() {
+    if (!platform.recDir.available) return toast('Cambiar la carpeta de grabación solo está disponible en la app de escritorio', 'warn');
+    const p = await platform.recDir.pick(this.recFolder());
+    if (!p) return;
+    const ck = await platform.recDir.check(p);
+    if (!ck.ok) return toast(ck.reason === 'missing' ? 'Esa carpeta no existe' : 'No se puede escribir en esa carpeta: elige otra', 'warn', 6000);
+    this.recDirProblem = '';
+    this.setSetting('recDir', p);
+    this.feedback.log('INFO', 'grabacion', 'Carpeta de grabación cambiada (carpeta elegida por el usuario)');
+    toast('Las grabaciones se guardarán en ' + p, 'ok', 5000);
+  }
+  resetRecDir() {
+    this.recDirProblem = '';
+    this.setSetting('recDir', '');
+    toast('Las grabaciones se guardarán en la carpeta de siempre', 'ok');
+  }
+  // Al arrancar y al abrir la franja o los Ajustes: si la carpeta elegida ya no sirve, se avisa (y se graba en la
+  // de siempre hasta que se cambie)
+  async checkRecDir() {
+    const d = this.settings.recDir;
+    if (!d || !platform.recDir.available) { this.recDirProblem = ''; return true; }
+    const ck = await platform.recDir.check(d);
+    this.recDirProblem = ck.ok ? '' : ck.reason;
+    return ck.ok;
   }
 
   // ------------------------------------------------------------------ IA
@@ -1226,6 +1474,7 @@ class App extends Emitter {
         case 'F9': this.toggleRecord(); break;
         case 'F6': this.engine.setSplit(!this.engine.split); break;
         case 'F8': this.toggleLaptopMode(); break;
+        case 'F10': this.toggleScreenView(); break;
         case 'F7': if (e.shiftKey) this.autoplay.toggle(); else this.automix.toggle(); break;
         // zoom de la forma de onda (en todos los decks o en el del último deck tocado, según Ajustes)
         case 'Equal': case 'NumpadAdd': this.zoomWaves(1 / 1.25); break;

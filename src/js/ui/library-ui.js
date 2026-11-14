@@ -1,7 +1,8 @@
 // Interfaz de la biblioteca
 import { el, fmtTime, camelotCompatible, debounce, uid, keyColor, CUE_COLORS, toast } from '../util.js';
 import { btn, select } from './controls.js';
-import { SMART_FIELDS, SMART_OPS, CRATE_SORTS } from '../library/library.js';
+import { SMART_FIELDS, SMART_OPS, CRATE_SORTS, SEARCH_FIELDS, searchFields, searchTracks, sortTracks } from '../library/library.js';
+import { FilesBrowser } from './files-ui.js';
 import { cratePath, pathLabel, effectiveColor } from '../library/crate-tree.js';
 import { treeFiles } from '../library/folder-crates.js';
 import { COLUMNS, COL_BY_KEY, DEFAULT_COLS, visibleColumns, columnTemplate, columnsFor } from '../library/columns.js';
@@ -14,6 +15,15 @@ import { ENERGY_MODES } from '../ai/assistant.js';
 const GRID = 'var(--lib-cols)';
 const SIDE_MIN = 140, SIDE_MAX = 520;
 const ART_SIZES = { small: { row: 28, col: 30 }, medium: { row: 44, col: 46 } };
+// densidad Compacta (Ajustes → Biblioteca; por defecto en la vista Biblioteca): filas de 23 px y letra de 13 px
+const DENSE_ROW = 23, DENSE_ART = { small: { row: 23, col: 25 }, medium: { row: 40, col: 42 } };
+// Explorar: filtros en cascada género → BPM → artista sobre la vista abierta
+const EXPLORE = [
+  { k: 'genre', label: 'GÉNERO', of: (t) => (t.genre || '').trim() || '(sin género)' },
+  { k: 'bpm', label: 'BPM', of: (t) => { const b = Math.round(t.bpm || 0); if (!b) return '(sin BPM)'; const lo = Math.floor(b / 5) * 5; return `${lo}–${lo + 4}`; } },
+  { k: 'artist', label: 'ARTISTA', of: (t) => (t.artist || '').trim() || '(sin artista)' }
+];
+const EXPLORE_MAX = 400;
 // 1 h 05 min / 42 min
 const countLabel = (n, one = 'pista', many = 'pistas') => n === 1 ? '1 ' + one : `${n} ${many}`;
 const fmtTotal = (s) => { const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`; };
@@ -36,10 +46,12 @@ const ICON = {
   import: 'M12 4v11 M7 10l5 5 5-5 M5 20h14',
   open: 'M6 9l6 6 6-6',
   closed: 'M9 6l6 6-6 6',
-  rail: 'M4 5h16v14H4z M9 5v14'
+  rail: 'M4 5h16v14H4z M9 5v14',
+  files: 'M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z M3 10h18',
+  filter: 'M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14z M20 20l-4-4 M8 11h6'
 };
-// Todas, Prepare e Historial en gris del tema; IA morado, crates ámbar, smart verde, YouTube rojo y Spotify verde
-const ICON_COLOR = { lib: 'var(--ico-lib)', ai: '#c792ff', prep: 'var(--ico-prep)', hist: 'var(--ico-hist)', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
+// Todas, Prepare, Historial y Archivos en gris del tema; IA morado, crates ámbar, smart verde, YouTube rojo y Spotify verde
+const ICON_COLOR = { lib: 'var(--ico-lib)', ai: '#c792ff', prep: 'var(--ico-prep)', hist: 'var(--ico-hist)', files: 'var(--ico-lib)', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
 function icon(name, size = 18, color = null, width = 2, cls = 'ico') {
   const NS = 'http://www.w3.org/2000/svg', s = document.createElementNS(NS, 'svg'), p = document.createElementNS(NS, 'path');
   // un color var(--…) no vale como atributo de SVG: va en el estilo
@@ -76,23 +88,30 @@ export class LibraryUI {
     this.focus = 'table';
     this.cols = [];
     this.rowH = 28;
+    this.explore = { on: false, genre: null, bpm: null, artist: null };
     this.missing = new Map();   // id → true (perdido) / false (existe); comprobado en esta sesión
     this.art = new Map();       // id → data: URL | null (sin carátula) | 'pending'
     this.checkMissingSoon = debounce(() => this.checkMissing(), 250);
     this.loadArtSoon = debounce(() => this.loadArt(), 120);
+    // panel «Archivos» (solo escritorio): si se cerró la app en esa vista y ahora no está disponible, a «Todas»
+    this.files = new FilesBrowser(this);
+    if (this.viewId === 'files' && !this.files.available) this.viewId = 'all';
     this.build();
     this.lib.on('change', debounce(() => { this.renderSide(); this.refresh(); }, 60));
     this.lib.on('track', debounce(() => this.refresh(false), 120));
     app.on('settings', (k) => {
       if (k === 'protectLibrary') this.refreshLock();
       if (k === 'libColsSame' || k === 'libArtSize') this.relayout();
+      if (k === 'libDensity') this.relayout(true);
       if (k === 'libRail') this.updateRail();
+      if (k === 'libView' || k === 'libHistOpen') this.refreshQuick();
     });
     // modo laptop (clase de body) → barra de iconos en «Automática»
     new MutationObserver(() => this.updateRail()).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     this.renderSide();
     this.updateRail();
     this.relayout();
+    if (this.viewId === 'files') this.files.show();
     requestAnimationFrame(() => this.revealActive());
   }
 
@@ -145,6 +164,10 @@ export class LibraryUI {
       this.search = this.searchIn.value; this.refresh();
     }, 120));
     this.searchIn.addEventListener('keydown', (e) => { if (e.key === 'Escape') { this.searchIn.value = ''; this.search = ''; this.refresh(); this.searchIn.blur(); } if (e.key === 'Enter') this.searchIn.blur(); });
+    // en qué campos busca el buscador (desplegable con casillas); con alguno desmarcado, el icono se marca
+    this.fieldsBtn = el('button', { class: 'search-fields', type: 'button', 'aria-haspopup': 'true', 'aria-expanded': 'false' }, icon('search', 15, null, 2.2), el('span', { class: 'sf-dot', 'aria-hidden': 'true' }));
+    this.fieldsBtn.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFieldsMenu(); });
+    this.refreshFieldsBtn();
     this.countEl = el('span', { class: 'count' });
     this.viewIco = el('span', { class: 'view-ico' });
     this.viewTitle = el('span', { class: 'view-title' });
@@ -160,9 +183,30 @@ export class LibraryUI {
     this.menuBtn = btn('≡', { cls: 'small lib-menu-btn', title: 'Más acciones de la biblioteca' });
     this.menuBtn.setAttribute('aria-label', 'Más acciones de la biblioteca');
     this.menuBtn.addEventListener('click', (e) => { e.stopPropagation(); this.menuAt(this.menuBtn, this.libMenu()); });
+    // botones rápidos (vista Biblioteca): vistas que ya existen en el árbol, Explorar y añadir música
+    const qb = (label, ico, title, fn) => {
+      const b = el('button', { class: 'lib-qbtn', type: 'button', title, 'aria-label': label }, icon(ico, 13, ICON_COLOR[ico] || null, 2.2), el('span', { class: 'qb-l' }, label), el('small', { class: 'qb-n' }));
+      b.addEventListener('click', fn);
+      return b;
+    };
+    this.quickBtns = {
+      all: qb('Todas', 'lib', 'Todas las pistas', () => this.setView('all')),
+      prep: qb('Prepare', 'prep', 'Prepare: tu lista de preparación (arrastra pistas aquí o al nodo Prepare)', () => this.setView('prepare')),
+      hist: qb('Historial', 'hist', 'Historial: abre la última sesión (todas, en el árbol)', () => this.openLastSession()),
+      explore: qb('Explorar', 'smart', 'Explorar: filtra la vista abierta por género, BPM y artista', () => this.toggleExplore()),
+      files: qb('Archivos', 'files', 'Archivos: navega por las carpetas y unidades del equipo y carga o añade su música', () => this.setView(this.viewId === 'files' ? 'all' : 'files')),
+      add: qb('Añadir', 'plus', 'Añadir archivos o una carpeta de música', (e) => this.menuAt(e.currentTarget, [
+        { label: 'Archivos…', fn: () => this.app.addFiles(false) },
+        { label: 'Carpeta…', fn: () => this.app.addFiles(true) }
+      ]))
+    };
+    this.quickBtns.explore.setAttribute('aria-pressed', 'false');
+    this.quickBtns.files.setAttribute('aria-pressed', 'false');
+    if (!this.files.available) this.quickBtns.files.hidden = true;
+    this.quick = el('span', { class: 'lib-quick', role: 'group', 'aria-label': 'Accesos rápidos de la biblioteca' }, ...Object.values(this.quickBtns));
     const toolbar = el('div', { class: 'lib-toolbar' },
       this.sideToggle,
-      el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.aiMode, this.searchIn, this.lockBtn,
+      el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.quick, this.aiMode, this.fieldsBtn, this.searchIn, this.lockBtn,
       btn('✨ Pedir set', { cls: 'small ai-btn', title: 'Describe un set con tus palabras y la IA lo crea con tu música', onClick: () => this.app.aiPromptDialog() }),
       btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten (respeta tus BPM corregidos)' }),
       this.cleanBtn, this.menuBtn);
@@ -175,7 +219,8 @@ export class LibraryUI {
     this.scroller.addEventListener('scroll', () => this.renderRows());
     this.scroller.addEventListener('focus', () => { this.focus = 'table'; this.root.classList.remove('side-focus'); });
     this.empty = el('div', { class: 'lib-empty' });
-    const main = el('div', { class: 'lib-main' }, toolbar, this.head, this.scroller, this.empty);
+    this.explorePanel = el('div', { class: 'lib-explore', hidden: true, role: 'group', 'aria-label': 'Explorar por género, BPM y artista' });
+    const main = el('div', { class: 'lib-main' }, toolbar, this.files.panel, this.explorePanel, this.head, this.scroller, this.empty);
     // tirador para el ancho de la barra lateral
     this.sideRs = el('div', { class: 'lib-side-rs', title: 'Arrastra para cambiar el ancho · doble clic: ancho por defecto' });
     this.root.append(this.rail, this.side, main, this.sideRs);
@@ -230,12 +275,21 @@ export class LibraryUI {
         if (crate && opts.crateId) return this.dropCrate(crate, opts.crateId, zone(e));
         if (!opts.drop) return;
         const ids = e.dataTransfer.getData('text/nexura-track');
-        if (ids) opts.drop(ids.split(','));
+        // archivos del panel «Archivos» que no estaban en la biblioteca: se añaden antes (y se analizan)
+        if (ids) { const list = ids.split(','); this.adoptLoose(list); opts.drop(list); }
         else if (e.dataTransfer.files.length && opts.crateId) await this.dropData(e.dataTransfer, { target: opts.crateId, listParent: opts.crateId });
         else if (e.dataTransfer.files.length) { const added = await this.dropData(e.dataTransfer); if (added.length) opts.drop(added.map(t => t.id)); }
       });
     }
     return it;
+  }
+  adoptLoose(ids) {
+    const added = this.lib.adoptLoose(ids);
+    if (!added.length) return added;
+    this.app.toast(`${countLabel(added.length)} del panel Archivos ${added.length === 1 ? 'añadida' : 'añadidas'} a la biblioteca`, 'ok');
+    const todo = added.filter(t => !t.analyzed);
+    if (todo.length && this.app.settings.autoAnalyze) this.app.analyzeMany(todo);
+    return added;
   }
   // Grupo del árbol: cabecera (título y como mucho un botón) y sus filas
   group(sec, title, action, rows, head = null) {
@@ -445,6 +499,7 @@ export class LibraryUI {
     if (hit('Todas las pistas')) lib.push(this.sideItem('all', 'Todas las pistas', local, { icon: 'lib', menu: libMenu }));
     if (hit('Siguiente pista (IA)')) lib.push(this.sideItem('ai:next', 'Siguiente pista (IA)', null, { icon: 'ai', cls: 'ai' }));
     if (hit('Prepare')) lib.push(this.sideItem('prepare', 'Prepare', L.prepare.length, { icon: 'prep', drop: (ids) => L.addToPrepare(ids), menu: [{ label: 'Vaciar Prepare', fn: () => L.removeFromPrepare([...L.prepare]) }] }));
+    if (this.files.available && hit('Archivos')) lib.push(this.sideItem('files', 'Archivos', null, { icon: 'files', title: 'Carpetas y unidades del equipo: carga su música en un deck o añádela a la biblioteca' }));
     const sessions = L.history.slice().reverse().slice(0, 30);
     const shown = q && !hit('Historial') ? sessions.filter(h => hit(this.sessionLabel(h))) : sessions;
     if (shown.length || hit('Historial')) {
@@ -560,7 +615,10 @@ export class LibraryUI {
   }
 
   setView(id) {
+    if (id === 'files' && !this.files.available) { this.app.toast('El panel Archivos solo está disponible en la app de escritorio', 'warn'); return; }
+    const wasFiles = this.viewId === 'files';
     this.viewId = id;
+    if (id === 'files') this.files.show(); else if (wasFiles) this.files.hide();
     this.sideCur = id;
     this.railSel = null;
     this.app.setSetting('libView', id);
@@ -584,6 +642,7 @@ export class LibraryUI {
     if (id === 'prepare') return 'Prepare';
     if (id === 'ai:next') return 'Siguiente pista (IA)';
     if (id === 'yt-all') return 'YouTube';
+    if (id === 'files') return this.files.dir ? 'Archivos › ' + this.files.dir.name : 'Archivos';
     const [k, v] = id.split(':');
     if (k === 'crate') return this.crateLabel(L.crate(v)) || 'Crate';
     if (k === 'smart') return (L.smart.find(c => c.id === v) || {}).name || 'Smart crate';
@@ -599,7 +658,7 @@ export class LibraryUI {
       if (this.isOnlineCrate(c)) return { icon: 'sp', color: ICON_COLOR.sp };
       return { icon: 'crate', color: (c && effectiveColor(this.lib.crates, c.id).color) || ICON_COLOR.crate };
     }
-    const n = { all: 'lib', everything: 'lib', 'ai:next': 'ai', prepare: 'prep', 'yt-all': 'yt' }[id] || { smart: 'smart', yt: 'yt', history: 'hist' }[k] || 'lib';
+    const n = { all: 'lib', everything: 'lib', 'ai:next': 'ai', prepare: 'prep', 'yt-all': 'yt', files: 'files' }[id] || { smart: 'smart', yt: 'yt', history: 'hist' }[k] || 'lib';
     return { icon: n, color: ICON_COLOR[n] };
   }
 
@@ -609,10 +668,13 @@ export class LibraryUI {
     const isAi = this.viewId === 'ai:next';
     this.root.classList.toggle('ai-view', isAi);
     this.root.classList.toggle('all-view', this.viewId === 'all');
-    if (isAi) {
-      const q = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      this.rows = this.app.ai.suggest(80).filter(t => !q.length || q.every(tok => `${t.title} ${t.artist} ${t.genre} ${t.camelot} ${t.bpm ? Math.round(t.bpm) : ''}`.toLowerCase().includes(tok)));
-    } else this.rows = this.lib.query(this.viewId, this.search, this.viewId.startsWith('history:') && !this.sort.field ? null : this.sort);
+    this.root.classList.toggle('files-view', this.viewId === 'files');
+    const fields = this.app.settings.searchFields;
+    if (isAi) this.rows = searchTracks(this.app.ai.suggest(80), this.search, fields);
+    else if (this.viewId === 'files') this.rows = sortTracks(searchTracks(this.files.rows(), this.search, fields), this.sort);
+    else this.rows = this.lib.query(this.viewId, this.search, this.viewId.startsWith('history:') && !this.sort.field ? null : this.sort, fields);
+    if (this.explore.on) this.rows = this.applyExplore(this.rows);
+    this.refreshQuick();
     if (keepId) this.cursor = this.rows.findIndex(r => r.id === keepId);
     // tras quitar pistas con Supr queda seleccionada la que ocupa ahora su lugar
     if (this.pendingSel != null) {
@@ -627,9 +689,10 @@ export class LibraryUI {
     const name = this.viewName(), vi = this.viewIcon();
     this.viewTitle.textContent = name;
     this.viewIco.replaceChildren(icon(vi.icon, 18, vi.color));
+    const fl = this.fieldsLabel();
     this.searchIn.placeholder = this.viewId === 'all' || this.viewId === 'everything'
-      ? 'Buscar (título, artista, BPM, tonalidad…) o pegar un enlace de YouTube o Spotify  ·  Ctrl+F'
-      : `Buscar en «${name}» (título, artista, BPM, tonalidad…)  ·  Ctrl+F`;
+      ? `Buscar (${fl}) o pegar un enlace de YouTube o Spotify  ·  Ctrl+F`
+      : this.viewId === 'files' ? `Buscar en esta carpeta (${fl})  ·  Ctrl+F` : `Buscar en «${name}» (${fl})  ·  Ctrl+F`;
     this.refreshLock();
     for (const h of this.head.children) {
       h.classList.toggle('sorted', h.dataset.key === this.sort.field);
@@ -643,11 +706,133 @@ export class LibraryUI {
       if (this.viewId === 'all' && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Tu biblioteca está vacía'), el('p', {}, 'Arrastra aquí archivos o carpetas de música, o usa «+ Añadir música» en la barra lateral.')));
       else if (this.viewId === 'ai:next' && !this.app.ai.refDeck()) this.empty.append(el('div', {}, el('h3', {}, '✨ Sugerencias de la IA'), el('p', {}, 'Carga una pista en un deck y aquí verás las que mejor mezclan con ella: tonalidad compatible, BPM cercano y energía.')));
       else if (this.viewId === 'ai:next') this.empty.append(el('p', {}, 'No hay pistas analizadas que encajen. Analiza tu biblioteca con «Analizar».'));
-      else if (this.viewId.startsWith('yt') && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Sin vídeos de YouTube'), el('p', {}, 'En la barra lateral, pulsa «+ Importar» en LISTAS ONLINE → «Lista de YouTube…» y pega la URL de una lista de reproducción.')));
+      else if (this.viewId === 'files' && !this.search) {
+        const d = this.files.dir;
+        this.empty.append(el('div', {}, el('h3', {}, d ? 'No hay archivos de audio en esta carpeta' : 'Archivos'),
+          el('p', {}, d ? 'Abre una subcarpeta en las columnas de arriba.' : 'Elige Música, Documentos o una unidad en las columnas de arriba. Los archivos de audio de la carpeta salen aquí: arrástralos a un deck para pincharlos o a una crate para añadirlos.')));
+      } else if (this.viewId.startsWith('yt') && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Sin vídeos de YouTube'), el('p', {}, 'En la barra lateral, pulsa «+ Importar» en LISTAS ONLINE → «Lista de YouTube…» y pega la URL de una lista de reproducción.')));
       else this.empty.append(el('p', {}, 'No hay resultados.'));
     }
     if (resetScroll) this.scroller.scrollTop = 0;
     this.renderRows();
+  }
+
+  // ------------------------------------------------------------ campos del buscador
+  // Elegidos (settings.searchFields; null = todos). Con todos marcados se guarda null (así los campos que se
+  // añadan en otra versión también entran)
+  chosenFields() { return searchFields(this.app.settings.searchFields); }
+  allFields() { return this.chosenFields().length === Object.keys(SEARCH_FIELDS).length; }
+  fieldsLabel() {
+    if (this.allFields()) return 'título, artista, BPM, tonalidad…';
+    return this.chosenFields().map(k => (k === 'bpm' ? 'BPM' : SEARCH_FIELDS[k].toLowerCase())).join(', ');
+  }
+  refreshFieldsBtn() {
+    const all = this.allFields();
+    this.fieldsBtn.classList.toggle('on', !all);
+    this.fieldsBtn.title = all ? 'Buscar en: todos los campos (clic para elegir)' : `Buscar solo en: ${this.chosenFields().map(k => SEARCH_FIELDS[k]).join(', ')} (clic para cambiar)`;
+    this.fieldsBtn.setAttribute('aria-label', this.fieldsBtn.title);
+  }
+  setFields(keys) {
+    const all = Object.keys(SEARCH_FIELDS), ok = all.filter(k => keys.includes(k));
+    this.app.setSetting('searchFields', !ok.length || ok.length === all.length ? null : ok);
+    this.refreshFieldsBtn();
+    this.refresh();
+  }
+  // Desplegable con casillas: se queda abierto mientras se marcan (se cierra con un clic fuera o Escape)
+  toggleFieldsMenu(open = !this.fieldsMenu) {
+    if (this.fieldsMenu) { this.fieldsMenu.remove(); this.fieldsMenu = null; document.removeEventListener('pointerdown', this._fieldsOut, true); document.removeEventListener('keydown', this._fieldsKey, true); }
+    this.fieldsBtn.setAttribute('aria-expanded', String(!!open));
+    if (!open) return;
+    const chosen = new Set(this.chosenFields());
+    const boxes = Object.entries(SEARCH_FIELDS).map(([k, label]) => {
+      const c = el('input', { type: 'checkbox', dataset: { field: k } });
+      c.checked = chosen.has(k);
+      c.addEventListener('change', () => {
+        const keys = boxes.filter(b => b.querySelector('input').checked).map(b => b.querySelector('input').dataset.field);
+        // al menos uno: desmarcar el último no se permite
+        if (!keys.length) { c.checked = true; return; }
+        this.setFields(keys);
+      });
+      return el('label', { class: 'sf-opt' }, c, el('span', {}, label));
+    });
+    const all = btn('Todos', { cls: 'micro', onClick: () => { boxes.forEach(b => { b.querySelector('input').checked = true; }); this.setFields(Object.keys(SEARCH_FIELDS)); } });
+    const m = el('div', { class: 'sf-menu', role: 'group', 'aria-label': 'Campos en los que busca el buscador' }, el('div', { class: 'sf-head' }, el('span', {}, 'BUSCAR EN'), all), ...boxes);
+    document.body.appendChild(m);
+    const r = this.fieldsBtn.getBoundingClientRect(), w = m.getBoundingClientRect().width;
+    m.style.left = Math.max(4, Math.min(r.left, innerWidth - w - 8)) + 'px';
+    m.style.top = (r.bottom + 4) + 'px';
+    this.fieldsMenu = m;
+    this._fieldsOut = (e) => { if (!m.contains(e.target) && !this.fieldsBtn.contains(e.target)) this.toggleFieldsMenu(false); };
+    this._fieldsKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); this.toggleFieldsMenu(false); this.fieldsBtn.focus(); } };
+    document.addEventListener('pointerdown', this._fieldsOut, true);
+    document.addEventListener('keydown', this._fieldsKey, true);
+    m.querySelector('input')?.focus();
+  }
+
+  // ------------------------------------------------------------ accesos rápidos y Explorar
+  refreshQuick() {
+    if (!this.quickBtns) return;
+    const v = this.viewId, q = this.quickBtns;
+    q.all.classList.toggle('on', v === 'all');
+    q.prep.classList.toggle('on', v === 'prepare');
+    q.hist.classList.toggle('on', v.startsWith('history:'));
+    const n = this.lib.prepare.length;
+    q.prep.lastChild.textContent = n ? String(n) : '';
+    q.hist.disabled = !this.lib.history.length;
+    q.explore.classList.toggle('on', this.explore.on);
+    q.explore.setAttribute('aria-pressed', String(this.explore.on));
+    q.files.classList.toggle('on', v === 'files');
+    q.files.setAttribute('aria-pressed', String(v === 'files'));
+  }
+  // Historial: la última sesión (las demás, en el árbol, que se despliega)
+  openLastSession() {
+    const h = this.lib.history[this.lib.history.length - 1];
+    if (!h) return this.app.toast('Todavía no hay sesiones en el historial', 'info');
+    if (!this.app.settings.libHistOpen) this.setHistOpen(true);
+    this.setView('history:' + h.id);
+  }
+  // al cerrarlo se quitan sus filtros (así no quedan pistas ocultas sin que se vea por qué)
+  toggleExplore(on = !this.explore.on) {
+    this.explore = on ? { ...this.explore, on } : { on: false, genre: null, bpm: null, artist: null };
+    this.explorePanel.hidden = !on;
+    this.refresh(true);
+  }
+  // Filtra en cascada (género → BPM → artista) y dibuja las tres listas con lo que queda en cada paso
+  applyExplore(rows) {
+    const x = this.explore, cols = [];
+    let cur = rows;
+    for (const f of EXPLORE) {
+      const counts = new Map();
+      for (const t of cur) { const k = f.of(t); counts.set(k, (counts.get(k) || 0) + 1); }
+      // lo elegido sigue en la lista aunque ya no tenga pistas (para poder quitarlo)
+      if (x[f.k] != null && !counts.has(x[f.k])) counts.set(x[f.k], 0);
+      cols.push({ f, total: cur.length, counts });
+      if (x[f.k] != null) cur = cur.filter(t => f.of(t) === x[f.k]);
+    }
+    this.renderExplore(cols);
+    return cur;
+  }
+  renderExplore(cols) {
+    const x = this.explore;
+    const item = (f, key, label, n) => {
+      const on = x[f.k] === key;
+      const b = el('button', { class: 'ex-item' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), title: label }, el('span', {}, label), el('small', {}, String(n)));
+      b.addEventListener('click', () => {
+        x[f.k] = on || key == null ? null : key;
+        // al cambiar un filtro se quitan los de después (género → BPM → artista)
+        for (const g of EXPLORE.slice(EXPLORE.indexOf(f) + 1)) x[g.k] = null;
+        this.refresh(true);
+      });
+      return b;
+    };
+    const top = [...this.explorePanel.querySelectorAll('.ex-list')].map(l => l.scrollTop);
+    this.explorePanel.replaceChildren(...cols.map(({ f, total, counts }, i) => {
+      const keys = [...counts.keys()].sort((a, b) => (f.k === 'bpm' ? (parseInt(a, 10) || 1e9) - (parseInt(b, 10) || 1e9) : a.localeCompare(b, 'es', { sensitivity: 'base' })));
+      const list = el('div', { class: 'ex-list' }, item(f, null, 'Todos', total), ...keys.slice(0, EXPLORE_MAX).map(k => item(f, k, k, counts.get(k))),
+        keys.length > EXPLORE_MAX ? el('p', { class: 'ex-more' }, `… y ${keys.length - EXPLORE_MAX} más (usa el buscador)`) : null);
+      requestAnimationFrame(() => { if (top[i]) list.scrollTop = top[i]; });
+      return el('div', { class: 'ex-col' }, el('div', { class: 'ex-head' }, f.label), list);
+    }), btn('✕', { cls: 'micro ex-close', title: 'Cerrar Explorar y quitar sus filtros', onClick: () => this.toggleExplore(false) }));
   }
 
   activeKey() {
@@ -672,13 +857,23 @@ export class LibraryUI {
     else this.app.setSetting('libCols', keys);
     this.relayout();
   }
-  // Cabecera y plantilla según las columnas visibles (al cambiarlas, de vista o de tamaño de pantalla)
-  relayout() {
+  // Densidad: Normal, Compacta o Automática (Compacta solo en la vista Biblioteca)
+  dense() {
+    const v = this.app.settings.libDensity || 'auto';
+    return v === 'compact' || (v === 'auto' && this.app.screenView === 'lib');
+  }
+  // Cabecera y plantilla según las columnas visibles (al cambiarlas, de vista, de densidad o de tamaño de
+  // pantalla). keepScroll: se conserva la primera fila visible aunque cambie la altura de las filas
+  relayout(keepScroll = false) {
+    const first = keepScroll && this.rowH ? this.scroller.scrollTop / this.rowH : 0;
+    const dense = this.dense();
+    this.root.classList.toggle('dense', dense);
     this._max = this.colMax();
     this.cols = visibleColumns(this.chosenCols(), this._max);
     const art = this.cols.some(c => c.key === 'art');
-    const size = ART_SIZES[this.app.settings.libArtSize] || ART_SIZES.small;
-    this.rowH = art ? size.row : 28;
+    const sizes = dense ? DENSE_ART : ART_SIZES;
+    const size = sizes[this.app.settings.libArtSize] || sizes.small;
+    this.rowH = art ? size.row : dense ? DENSE_ROW : 28;
     this.root.style.setProperty('--row-h', this.rowH + 'px');
     this.root.style.setProperty('--art-w', size.col + 'px');
     this.head.innerHTML = '';
@@ -696,6 +891,7 @@ export class LibraryUI {
     }
     this.applyColWidths();
     this.refresh();
+    if (keepScroll) this.scroller.scrollTop = Math.round(first * this.rowH);
   }
   columnsMenu(e) {
     const s = this.app.settings, chosen = new Set(visibleColumns(this.chosenCols()).map(c => c.key));
@@ -790,6 +986,7 @@ export class LibraryUI {
         const { ai, deckIdx, played } = ctx, lost = this.missing.get(t.id) === true;
         if (ai) return el('span', { class: 'st ai-score', title: ai.reasons.join(' · '), style: `--s:${ai.score.toFixed(2)}` }, String(Math.round(ai.score * 100)));
         if (lost && deckIdx == null) return el('span', { class: 'st missing', title: 'Archivo no encontrado: clic derecho → «Relocalizar archivos perdidos…»' }, '!');
+        if (t.external && deckIdx == null) return el('span', { class: 'st ext', title: 'No está en la biblioteca (arrástralo a una crate o a Prepare para añadirlo)' }, '◌');
         return el('span', { class: 'st' + (deckIdx != null ? ' deck' + deckIdx : '') },
           deckIdx != null ? String(deckIdx + 1) : t.source === 'youtube' ? '▶' : (t.analyzed ? (played ? '✓' : '') : '○'));
       }
@@ -826,7 +1023,7 @@ export class LibraryUI {
       const t = this.rows[i];
       const ctx = { deckIdx: loaded.get(t.id), ai: this.viewId === 'ai:next' ? this.app.ai.scores.get(t.id) : null, played: played.has(t.id), akey };
       const r = el('div', {
-        class: 'row-t' + (this.sel.has(t.id) ? ' sel' : '') + (i === this.cursor ? ' cur' : '') + (i % 2 ? ' odd' : '') + (ctx.played ? ' played' : '') + (t.source === 'youtube' ? ' yt' : '') + (this.missing.get(t.id) === true ? ' missing' : ''),
+        class: 'row-t' + (this.sel.has(t.id) ? ' sel' : '') + (i === this.cursor ? ' cur' : '') + (i % 2 ? ' odd' : '') + (ctx.played ? ' played' : '') + (t.source === 'youtube' ? ' yt' : '') + (this.missing.get(t.id) === true ? ' missing' : '') + (t.external ? ' ext' : ''),
         style: { top: i * RH + 'px', gridTemplateColumns: GRID }, draggable: 'true', dataset: { i }
       }, ...this.cols.map(c => this.cell(c.key, t, ctx)));
       r.addEventListener('pointerdown', (e) => this.onRowDown(e, i));
@@ -869,7 +1066,8 @@ export class LibraryUI {
     this.app.toast(lost ? `${lost} archivo(s) perdidos (marcados con «!»). Clic derecho → «Relocalizar archivos perdidos…»` : 'Todos los archivos están en su sitio', lost ? 'warn' : 'ok', 6000);
   }
   async loadArt() {
-    const todo = (this._visible || []).filter(t => t.source === 'local' && !this.art.has(t.id) && this.missing.get(t.id) !== true);
+    // (los archivos del panel «Archivos» que no están en la biblioteca no dejan carátulas en la caché)
+    const todo = (this._visible || []).filter(t => t.source === 'local' && !t.external && !this.art.has(t.id) && this.missing.get(t.id) !== true);
     if (!todo.length) return;
     for (const t of todo) this.art.set(t.id, 'pending');
     for (const t of todo) {
@@ -960,11 +1158,27 @@ export class LibraryUI {
     else this.scroller.focus({ preventScroll: true });
   }
 
+  // Archivos del panel «Archivos» que no están en la biblioteca: cargar, añadir (a la biblioteca, a una crate o a
+  // Prepare) y mostrar en la carpeta
+  looseMenu(e, sel) {
+    const app = this.app, L = this.lib, one = sel[0], ids = sel.map(t => t.id);
+    const add = (fn) => () => { this.adoptLoose(ids); fn && fn(); };
+    app.contextMenu(e, [
+      ...Array.from({ length: app.deckCount }, (_, i) => ({ label: `Cargar en Deck ${i + 1}`, fn: () => app.loadToDeck(one.id, i) })),
+      { label: `Añadir a la biblioteca (${ids.length})`, fn: add() },
+      { label: 'Añadir a Prepare', fn: add(() => L.addToPrepare(ids)) },
+      { label: 'Añadir a crate', sub: [...this.crateChoices((c) => { this.adoptLoose(ids); L.addToCrate(c.id, ids); }), { label: '+ Nueva crate…', fn: async () => { if (!L.guard('crate')) return; const n = await app.prompt('Nombre de la crate', ''); const c = n && L.createCrate(n); if (c) { this.adoptLoose(ids); L.addToCrate(c.id, ids); } } }] },
+      { label: 'Cargar en sampler', sub: Array.from({ length: 8 }, (_, i) => ({ label: 'Ranura ' + (i + 1), fn: () => { app.sampler.loadSlot(i, one.path, one.title); app.saveSamplerSoon(); } })) },
+      { label: 'Mostrar en carpeta', fn: () => app.platform.showItem(one.path) }
+    ]);
+  }
+
   rowMenu(e) {
     const app = this.app, L = this.lib;
     const sel = this.selected();
     const ids = sel.map(t => t.id);
     const one = sel[0];
+    if (sel.some(t => t.external)) return this.looseMenu(e, sel);
     const items = [
       { label: 'Cargar en Deck 1', fn: () => app.loadToDeck(one.id, 0) },
       { label: 'Cargar en Deck 2', fn: () => app.loadToDeck(one.id, 1) },
@@ -1020,6 +1234,7 @@ export class LibraryUI {
     if (v === 'all' || v === 'everything' || v === 'yt-all') return this.deleteFromLibrary(ids, { ask: true });   // Supr sin Ctrl: con confirmación, como antes
     if (v.startsWith('crate:')) return this.removeFromCrate(v.slice(6), ids);
     if (v === 'prepare') return this.removeFromPrepare(ids);
+    if (v === 'files') { toast('En el panel Archivos, Supr no quita nada (ni borra archivos del disco). Para eliminar de la biblioteca: Ctrl+Supr', 'warn', 4500); return false; }
     // historial, smart crates, Siguiente pista (IA) y listas de YouTube: su contenido no se edita a mano
     const what = v.startsWith('history:') ? 'del historial' : v.startsWith('smart:') ? 'de una smart crate (sigue sus reglas)' : v === 'ai:next' ? 'de las sugerencias de la IA' : 'de una lista de YouTube importada';
     toast(`Supr no quita pistas ${what}. Para eliminarlas de la biblioteca: Ctrl+Supr`, 'warn', 4500);

@@ -17,17 +17,34 @@ const validEmail = (s) => /^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$/.test(String
 
 // Parte técnica (solo si se marca «Adjuntar registro técnico»): versión, sistema, controladora y las
 // últimas líneas del registro, sin rutas, canciones, artistas ni correos.
-function technical({ version, os, controller, decks, log = [], known = [], user = '', home = '', perf = null }) {
+function technical({ version, os, controller, controllers = [], decks, log = [], known = [], user = '', home = '', perf = null }) {
   const ctl = String(controller || '').slice(0, 80);
   const t = {
     version: String(version || ''),
     os: String(os || ''),
     controller: ctl ? anonymize(ctl, { known, user, home }) : 'ninguna',
+    controllers: controllerList(controllers, { known, user, home }),
     decks: [2, 4].includes(Number(decks)) ? Number(decks) : 2,
     log: (log || []).slice(-LOG_LINES).map(l => anonymize(l, { known, user, home }))
   };
   if (perf) t.perf = perfInfo(perf, { known, user, home });
   return t;
+}
+
+// Controladoras conectadas: nombre del puerto MIDI (lo da el fabricante, p. ej. «DDJ-400»; no es un dato
+// personal) y tipo de perfil, de una lista cerrada
+const PROFILE_TYPES = ['incluido', 'asistente', 'importado', 'ninguno'];
+const PROFILE_TEXT = { incluido: 'perfil incluido', asistente: 'configurada con el asistente o MIDI Learn', importado: 'mapeo importado', ninguno: 'sin perfil' };
+function controllerList(list, anon) {
+  return (Array.isArray(list) ? list : []).slice(0, 6).filter(c => c && c.port).map(c => ({
+    port: anonymize(txt(c.port, 80), anon),
+    type: PROFILE_TYPES.includes(c.type) ? c.type : 'ninguno',
+    model: anonymize(txt(c.model, 60), anon)
+  }));
+}
+function controllersText(list) {
+  if (!list || !list.length) return 'ninguna';
+  return list.map(c => `${c.port} (${PROFILE_TEXT[c.type]}${c.model && c.type === 'incluido' ? ': ' + c.model : ''})`).join(' · ');
 }
 
 // Diagnóstico de rendimiento: solo números, modelos de procesador y tarjeta gráfica y ajustes de la app
@@ -47,8 +64,28 @@ function perfInfo(perf, anon = {}) {
     tracks: num(a.tracks), perfMode: !!a.perfMode, fpsTarget: num(a.fpsTarget, 1000), layout: clean(a.layout, 12),
     windowMin: num(a.windowMin, 1e4), fps: num(a.fps, 1000), fpsPlaying: num(a.fpsPlaying, 1000),
     longTasks: num(a.longTasks), longMaxMs: num(a.longMaxMs), stalls: num(a.stalls), stallMaxMs: num(a.stallMaxMs),
-    freezes: (Array.isArray(a.freezes) ? a.freezes : []).slice(-10).map(f => ({ minAgo: num(f.minAgo, 1e5), ms: num(f.ms, 1e7), kind: f.kind === 'gpu' ? 'gpu' : 'hilo', gpu: !!f.gpu }))
+    freezes: (Array.isArray(a.freezes) ? a.freezes : []).slice(-10).map(f => ({ minAgo: num(f.minAgo, 1e5), ms: num(f.ms, 1e7), kind: f.kind === 'gpu' ? 'gpu' : 'hilo', gpu: !!f.gpu })),
+    startup: startupInfo(a.startup)
   };
+}
+// Arranque (app.startup en la interfaz): estado de MIDI y pasos lentos. Solo valores de listas cerradas
+const MIDI_STATES = ['init', 'waiting', 'ok', 'denied', 'unsupported', 'timeout'];
+const START_STEPS = ['settings', 'info', 'audio', 'library', 'outputs'];
+function startupInfo(s) {
+  if (!s || typeof s !== 'object') return null;
+  return {
+    midi: MIDI_STATES.includes(s.midi) ? s.midi : '', midiMs: s.midiMs == null ? null : num(s.midiMs, 1e7), midiTimeouts: num(s.midiTimeouts, 1e4) || 0,
+    outputs: ['init', 'ok', 'error'].includes(s.outputs) ? s.outputs : '',
+    slow: (Array.isArray(s.slow) ? s.slow : []).filter(x => x && START_STEPS.includes(x.step)).slice(0, 10).map(x => ({ step: x.step, ms: num(x.ms, 1e7), done: !!x.done }))
+  };
+}
+const MIDI_TEXT = { init: 'sin iniciar', waiting: 'esperando respuesta', ok: 'conectado', denied: 'acceso denegado', unsupported: 'no disponible', timeout: 'no responde' };
+const STEP_TEXT = { settings: 'ajustes', info: 'información de la app', audio: 'motor de audio', library: 'biblioteca', outputs: 'salidas de audio' };
+function startupText(s) {
+  if (!s) return [];
+  const midi = `MIDI ${MIDI_TEXT[s.midi] || '?'}` + (s.midiMs != null ? ` (respondió en ${s.midiMs} ms)` : '') + (s.midiTimeouts ? ` · sin respuesta en 5 s ${s.midiTimeouts} ${s.midiTimeouts === 1 ? 'vez' : 'veces'}` : '');
+  const slow = s.slow.length ? s.slow.map(x => `${STEP_TEXT[x.step]} ${x.done ? `${x.ms} ms` : 'sin terminar'}`).join(' · ') : 'ninguno';
+  return [`Arranque: ${midi} · salidas de audio ${s.outputs === 'ok' ? 'aplicadas' : s.outputs === 'error' ? 'con error' : 'pendientes'} · pasos de más de 5 s: ${slow}`];
 }
 function perfText(p) {
   if (!p) return [];
@@ -59,20 +96,22 @@ function perfText(p) {
     `Aceleración por GPU: ${p.gpuSetting === 'off' ? 'desactivada por el usuario' : 'automática'} · composición ${yes(p.gpuStatus.compositing)} · canvas ${yes(p.gpuStatus.canvas2d)} · rasterización ${yes(p.gpuStatus.raster)} · Electron ${p.electron}`,
     `Biblioteca: ${p.tracks} pistas · modo rendimiento ${yes(p.perfMode)} (objetivo ${p.fpsTarget} fps) · vista de onda ${p.layout}`,
     `Últimos ${p.windowMin} min: onda ${p.fps} fps de media (${p.fpsPlaying} fps sonando) · tareas largas ${p.longTasks} (máx. ${p.longMaxMs} ms) · bloqueos de más de 100 ms ${p.stalls} (máx. ${p.stallMaxMs} ms)`,
-    `Congelaciones de la onda: ${p.freezes.length ? p.freezes.map(f => `hace ${f.minAgo} min, ${f.ms} ms (${f.kind === 'gpu' ? 'sin dibujar con el hilo libre' : 'hilo ocupado'}${f.gpu ? ', GPU activa' : ''})`).join(' · ') : 'ninguna'}`
+    `Congelaciones de la onda: ${p.freezes.length ? p.freezes.map(f => `hace ${f.minAgo} min, ${f.ms} ms (${f.kind === 'gpu' ? 'sin dibujar con el hilo libre' : 'hilo ocupado'}${f.gpu ? ', GPU activa' : ''})`).join(' · ') : 'ninguna'}`,
+    ...startupText(p.startup)
   ];
 }
 
 // Texto legible del informe (vista previa del diálogo y archivo .txt de respaldo)
-function reportText({ kind, text, email, tech }) {
+function reportText({ kind, text, email, userController = '', tech }) {
   const out = [
     `Nexura DJ Studio — ${KINDS[kind] || 'Otro'}`,
     `Fecha: ${new Date().toISOString()}`,
     email ? `Contacto: ${email}` : 'Contacto: (no indicado)',
+    ...(userController ? [`Controladora (según el usuario): ${userController}`] : []),
     '', String(text || '').trim(), ''
   ];
   if (tech) {
-    out.push('--- Registro técnico ---', `Versión: ${tech.version}`, `Sistema: ${tech.os}`, `Controladora MIDI: ${tech.controller}`, `Decks: ${tech.decks}`);
+    out.push('--- Registro técnico ---', `Versión: ${tech.version}`, `Sistema: ${tech.os}`, `Controladora MIDI: ${tech.controller}`, `Controladoras conectadas: ${controllersText(tech.controllers)}`, `Decks: ${tech.decks}`);
     if (tech.perf) out.push('--- Diagnóstico de rendimiento ---', ...perfText(tech.perf));
     out.push(`Últimas ${tech.log.length} líneas del registro:`, ...tech.log);
   }
@@ -81,19 +120,26 @@ function reportText({ kind, text, email, tech }) {
 
 // JSON que se envía al endpoint. Incluye los campos del flujo de sugerencias de la beta (subject,
 // category, message, contact, system, errors) para que el webhook ya existente siga funcionando.
-function buildPayload({ kind, text, email, attach, tech, version }) {
+// «¿Qué controladora usas?» (opcional, lo escribe el usuario): una línea corta
+const cleanUserController = (s) => txt(s, 80).trim();
+
+function buildPayload({ kind, text, email, userController = '', attach, tech, version }) {
   const k = KINDS[kind] ? kind : 'other';
   const msg = String(text || '').trim().slice(0, 8000);
   const contact = validEmail(email) ? String(email).trim() : '';
   const first = msg.split('\n')[0].slice(0, 60);
+  const uc = cleanUserController(userController);
   const p = {
-    app: 'Nexura DJ Studio', type: k, category: KINDS[k], message: msg, email: contact, contact,
+    app: 'Nexura DJ Studio', type: k, category: KINDS[k],
+    // la controladora también va al final del mensaje, para que la vea el flujo de sugerencias tal como está
+    message: msg + (uc ? `\n\n— Controladora: ${uc}` : ''), email: contact, contact,
+    ...(uc ? { controllerUser: uc } : {}),
     version: String(version || ''), date: new Date().toISOString(),
     subject: `[Nexura DJ Studio ${version || ''}] ${KINDS[k]}${first ? ': ' + first : ''}`
   };
   if (attach && tech) {
     p.technical = tech;
-    p.system = `Versión: ${tech.version}\nSistema: ${tech.os}\nControladora MIDI: ${tech.controller}\nDecks: ${tech.decks}` + (tech.perf ? '\n' + perfText(tech.perf).join('\n') : '');
+    p.system = `Versión: ${tech.version}\nSistema: ${tech.os}\nControladora MIDI: ${tech.controller}\nControladoras conectadas: ${controllersText(tech.controllers)}\nDecks: ${tech.decks}` + (tech.perf ? '\n' + perfText(tech.perf).join('\n') : '');
     p.errors = tech.log.join('\n');
   }
   return p;
@@ -108,4 +154,4 @@ function mailtoUrl({ kind, text, email, file }) {
   return 'mailto:contacto@nexuraia.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 
-module.exports = { KINDS, LOG_LINES, windowsLabel, validEmail, technical, perfInfo, perfText, reportText, buildPayload, mailtoUrl };
+module.exports = { KINDS, LOG_LINES, PROFILE_TYPES, windowsLabel, validEmail, technical, controllersText, cleanUserController, perfInfo, perfText, reportText, buildPayload, mailtoUrl };

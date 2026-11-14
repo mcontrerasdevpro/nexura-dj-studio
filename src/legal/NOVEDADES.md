@@ -1,5 +1,41 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.6 · noviembre de 2026
+
+### Vista Biblioteca: más pistas a la vista
+- Nuevo botón **▤ BIBLIOTECA** en la barra superior (o la tecla **F10**): los decks se vuelven compactos arriba, con la **forma de onda grande en el centro**, y la biblioteca ocupa el resto de la pantalla. En una pantalla de 1920 × 1080 pasas de ver **8 pistas a ver 30**.
+- Cada deck compacto lleva lo que usas en cabina: título en una línea, tonalidad y BPM, plato pequeño con el **tiempo transcurrido y el restante**, los **8 pads** con sus modos, **loops rápidos de 1/8 a 16**, CUE, PLAY, SYNC, pitch y un **vúmetro** del canal.
+- **Cambiar de vista no corta nada**: los decks siguen sonando y todo queda como estaba. La app recuerda la vista que usabas.
+- El **mezclador** se oculta (lo llevas en la controladora) y aparece cuando lo necesitas con el botón **MIXER**. El sonido no cambia: solo se esconde en pantalla.
+- **Franjas plegables** entre los decks y la biblioteca: **grabación** (botón REC: grabar o parar, nombre de la mezcla, dónde se guarda, nivel y tiempo grabado), **efectos** (botón FX: las dos unidades con sus tres efectos, canal y beats) y **sampler**. Se cierran con su **▲** y se recuerda cuáles tenías abiertas.
+- Accesos rápidos encima de la tabla: **Todas, Prepare, Historial, Explorar y Añadir**. **Explorar** filtra la vista abierta por **género → BPM → artista** con un clic en cada columna.
+
+### Biblioteca compacta
+- Nuevo ajuste **«Densidad de la biblioteca»** en **Ajustes → Biblioteca**: **Normal** (la de siempre), **Compacta** (filas finas de 23 px y letra de 13 px) o **Automática**, que usa la Compacta en la vista Biblioteca y la Normal en la vista Mezcla.
+- Con la densidad Compacta, el **árbol de crates también se aprieta**: filas finas, iconos pequeños y subcrates sangrados, para ver muchas más crates sin hacer scroll.
+
+### Funciona con más controladoras
+- **Se reconocen y se configuran solas** nuevas controladoras, además de la Denon DJ MC4000: **Pioneer DJ DDJ-400, DDJ-FLX4 y DDJ-SB3**, **Hercules DJControl Inpulse 200, 300 y 500** y **Reloop Mixtour y Mixon 4**. Los perfiles están hechos con la documentación MIDI oficial de cada fabricante e incluyen LEDs y vúmetros donde el fabricante los documenta.
+- Al conectar una controladora, la app te dice **«Controladora X detectada: perfil cargado»**. Si es un modelo sin perfil, te ofrece **configurarla con el asistente**, **importar un mapeo de Mixxx** (con un enlace a su lista oficial de controladoras) o **«Ahora no»**, y no vuelve a insistir con esa controladora.
+- En **Ajustes → MIDI** ves cada controladora conectada con el perfil que usa (incluido, asistente, importado o ninguno), puedes cambiarlo o reconfigurarla, y tienes la lista de modelos con perfil incluido.
+- El **informe de errores** indica qué controladora tienes conectada y con qué tipo de perfil, y el formulario de sugerencias tiene un campo opcional **«¿Qué controladora usas?»**.
+
+### Arranque sin esperar a la controladora
+- Arreglado: a veces, con cualquier controladora conectada, la app arrancaba pero **la forma de onda, los relojes y los vúmetros se quedaban quietos** aunque la música sonara, y el teclado no respondía. Pasaba cuando Windows tardaba en contestar por la controladora y la app se quedaba esperándolo.
+- Ahora la app **arranca siempre sin esperar a la controladora**. Si no responde en 5 segundos, verás un aviso discreto, **«La controladora no responde; reconéctala o pulsa Reintentar»**, con su botón **Reintentar**. La app lo sigue intentando sola y, en cuanto responde, la controladora funciona.
+
+### Panel Archivos
+- Nuevo acceso **Archivos** junto a Todas, Prepare, Historial y Explorar (y en el árbol de la biblioteca, también en la vista Mezcla): navega por **Música, Documentos y todas las unidades** del equipo (con su nombre) en columnas. Al pulsar una carpeta se abre la siguiente columna y **su música sale en la lista**.
+- Las canciones que ya tienes en la biblioteca salen con sus datos; las demás, **más apagadas** y con el título, el artista, el BPM y la duración de sus etiquetas.
+- **Arrástralas a un deck** para pincharlas **sin añadirlas** a la biblioteca, o **a una crate o a Prepare** para añadirlas. Con **«Añadir esta carpeta a la biblioteca»** importas la carpeta entera, como con «Añadir música».
+- La app **recuerda la última carpeta** que abriste. No muestra las carpetas del sistema ni las ocultas.
+
+### Buscar solo donde quieres
+- Junto al buscador, un **icono con casillas** para elegir en qué buscar: **título, artista, álbum, género, comentario, BPM, tonalidad y año**. Por defecto, en todos. Si desmarcas alguno, el icono se marca para que lo sepas. Se recuerda.
+
+### Elige dónde se guardan tus grabaciones
+- Botón **«Cambiar…»** en la franja de grabación y en **Ajustes → Audio → Grabación**. Si esa carpeta deja de existir (por ejemplo, un disco desconectado), la grabación **no se pierde**: se guarda en la de siempre (Música › Nexura DJ Studio › Grabaciones) y te avisa.
+
 ## 1.0.0-rc.5 · noviembre de 2026
 
 ### Ves más de lo que viene

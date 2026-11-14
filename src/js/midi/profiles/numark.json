@@ -1,9 +1,14 @@
 {
-  "id": "numark-generic",
-  "name": "Numark (genérico)",
-  "match": ["Numark"],
-  "manufacturer": "Numark",
-  "version": 1,
-  "mappings": [],
-  "note": "Plantilla deliberadamente vacía: crea mappings con MIDI Learn después de identificar el modelo exacto y su modo MIDI."
+ "//": "Familia sin perfil de modelo: solo sirve para nombrar la marca en Ajustes → MIDI y en el aviso de controladora nueva.",
+ "id": "numark-generic",
+ "name": "Numark",
+ "manufacturer": "Numark",
+ "generic": true,
+ "match": [
+  "Numark",
+  "Mixtrack",
+  "Party ?Mix"
+ ],
+ "mappings": [],
+ "note": "Numark no publica tablas MIDI de sus controladoras (Mixtrack Pro 3, Mixtrack Pro FX, Party Mix): usa el asistente o importa un mapeo de Mixxx."
 }

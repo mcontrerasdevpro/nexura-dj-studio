@@ -9,6 +9,7 @@
      3. Botones y entradas      8. Sampler             13. Avisos
      4. Knobs y faders          9. Biblioteca          14. Modo laptop
      5. Formas de onda y decks 10. Barra de estado     15. Pantallas pequeñas
+                                                       16. Vista Biblioteca y densidad Compacta (al final)
    ========================================================================== */
 
 /* 1. Variables y base ------------------------------------------------------ */
@@ -1337,3 +1338,262 @@ body.four-decks.laptop-mode #waves { grid-template-rows: repeat(4, 30px); gap: 2
 .col-rs:hover::after { background: var(--grip); width: 2px; }
 .lib-head .th:last-child .col-rs { right: 0; }
 body.resizing-col { cursor: col-resize; user-select: none; }
+
+/* 16. Vista Biblioteca (▤ BIBLIOTECA o F10) y densidad Compacta ------------------------------ */
+/* Solo cambia la disposición: decks compactos arriba con la forma de onda en el centro, franjas plegables
+   de grabación, efectos y sampler, mezclador desplegable (MIXER) y la biblioteca en el resto (≥ la mitad de
+   la altura). #dj-layout pasa a «display: contents» para colocar los decks y la onda en la rejilla de #app
+   sin mover nada del DOM; dentro de cada deck, lo mismo con sus columnas (deck-ui.js no cambia de estructura). */
+.lib-only, .strip-fold, .deck .qloops, .deck .deck-meter, .lib-quick { display: none; }
+/* alto fijo de la franja de los decks (con «auto», el tamaño propio de los lienzos de la onda la estiraba);
+   un deck con vídeo de YouTube necesita su reproductor de 200 × 200 px y la franja crece mientras lo haya */
+body.view-lib { --strip-h: clamp(196px, 22.5vh, 290px); --top-h: 32px; }
+body.view-lib:has(.deck.yt:not([hidden])) { --strip-h: max(clamp(196px, 22.5vh, 290px), 300px); }
+html body.view-lib #app {
+  display: grid; padding: 4px; gap: 0 4px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, 1fr);
+  grid-template-rows: auto var(--strip-h) auto auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "top top top" "d0 waves d1" "rec rec rec" "fx fx fx" "smp smp smp" "lib lib lib" "status status status";
+}
+body.view-lib #topbar { grid-area: top; height: var(--top-h); margin-bottom: 4px; }
+body.view-lib #dj-layout { display: contents; }
+body.view-lib #deck0, body.view-lib #deck2 { grid-area: d0; }
+body.view-lib #deck1, body.view-lib #deck3 { grid-area: d1; }
+body.view-lib #recbar { grid-area: rec; margin-top: 4px; }
+body.view-lib #fxbar { grid-area: fx; margin-top: 4px; }
+body.view-lib #sampler { grid-area: smp; margin-top: 4px; }
+body.view-lib #library { grid-area: lib; margin-top: 4px; min-height: max(302px, 50vh); }
+body.view-lib #statusbar { grid-area: status; margin-top: 2px; }
+body.view-lib .lib-only, body.view-lib .strip-fold { display: inline-block; }
+html body.view-lib .topbar-menu-toggle, body.view-lib .wave-layout-toggle { display: none; }
+.btn.rec.open:not(.on) { background: var(--on-bg); border-color: var(--on-line); }
+.btn.view-toggle.on { background: var(--on-solid); border-color: var(--on-solid); color: var(--on-solid-text); }
+
+/* forma de onda grande en el centro: las de los decks cargados (una sola si solo hay uno) */
+html body.view-lib #waves { grid-area: waves; display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 3px; min-height: 0; overflow: hidden; }
+body.view-lib #waves .wave { min-height: 0; }
+html body.view-lib.four-decks #waves { grid-template-rows: repeat(4, minmax(0, 1fr)); }
+html body.view-lib #waves.single { grid-template-rows: minmax(0, 1fr); }
+body.view-lib .wave.wave-off { display: none; }
+
+/* mezclador: oculto; MIXER lo despliega debajo de los decks, encima de la biblioteca */
+html body.view-lib #mixer { display: none; }
+html body.view-lib.mixer-open #mixer {
+  display: flex; flex-direction: column; position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  top: calc(var(--strip-h) + var(--top-h) + 16px); width: 300px; max-height: calc(100vh - var(--strip-h) - var(--top-h) - 28px); overflow: auto;
+  border-color: var(--line2); box-shadow: 0 18px 50px rgba(0, 0, 0, .65);
+}
+html body.view-lib.mixer-open.four-decks #mixer { width: 420px; }
+
+/* deck compacto: cabecera (título en una línea, tonalidad y BPM), vista general, modos de pad, 8 pads,
+   loops rápidos, CUE / PLAY / SYNC, plato pequeño con los tiempos encima, pitch y vúmetro vertical */
+html body.view-lib .deck {
+  display: grid; min-height: 0; overflow: hidden; gap: 4px 6px; padding: 5px 7px 6px;
+  grid-template-columns: minmax(0, 1fr) var(--plat, 104px) 38px 8px;
+  grid-template-rows: auto auto auto minmax(40px, 1fr) auto auto;
+  grid-template-areas: "head head head head" "ov ov ov ov" "tabs plat prange meter" "pads plat pitch meter" "loops plat pitch meter" "trans trans ppct meter";
+}
+html body.view-lib .deck.d1 {
+  grid-template-columns: 8px 38px var(--plat, 104px) minmax(0, 1fr);
+  grid-template-areas: "head head head head" "ov ov ov ov" "meter prange plat tabs" "meter pitch plat pads" "meter pitch plat loops" "meter ppct trans trans";
+}
+html body.view-lib .deck.yt { --plat: 200px; }
+html body.view-lib .deck .deck-body, html body.view-lib .deck .platter-col, html body.view-lib .deck .perf-col, html body.view-lib .deck .pitch-col { display: contents; }
+html body.view-lib .deck .row:not(.qloops), html body.view-lib .deck .pad-hint, html body.view-lib .deck .bend,
+html body.view-lib .deck .reset-btn, html body.view-lib .deck .deck-detail-wave { display: none; }
+html body.view-lib .deck.empty .pads, html body.view-lib .deck.empty .qloops, html body.view-lib .deck.empty .platter-wrap { opacity: .55; }
+/* cabecera en una sola línea: número, título (y artista detrás), tonalidad, BPM, tempo y fase */
+html body.view-lib .deck .deck-head { grid-area: head; gap: 8px; height: 24px; }
+html body.view-lib .deck .deck-num { width: 22px; height: 22px; font-size: 13px; }
+html body.view-lib .deck .deck-meta { display: flex; align-items: baseline; gap: 8px; }
+html body.view-lib .deck .d-title { flex: 0 1 auto; min-width: 0; font-size: 15px; line-height: 1.2; }
+html body.view-lib .deck .d-sub { flex: 1 1 0; }
+html body.view-lib .deck .d-artist { font-size: 11.5px; }
+html body.view-lib .deck .deck-stats { gap: 8px; }
+html body.view-lib .deck .d-key { font-size: 12px; padding: 1px 6px; min-width: 36px; }
+html body.view-lib .deck .d-bpmbox { display: flex; align-items: center; gap: 6px; }
+html body.view-lib .deck .d-bpm b { font-size: 18px; }
+html body.view-lib .deck .d-tempo { font-size: 10px; }
+html body.view-lib .deck .phase-meter { height: 6px; margin: 0; }
+html body.view-lib .deck .phase-meter .pm-dot { top: 0; }
+html body.view-lib .deck .deck-overview-panel { grid-area: ov; }
+html body.view-lib .deck .overview { height: 18px; }
+html body.view-lib .deck .pad-tabs { grid-area: tabs; flex-wrap: wrap; }
+html body.view-lib .deck .pad-tab { flex: 1 1 40px; font-size: 9px; padding: 2px 3px; }
+html body.view-lib .deck .pads { grid-area: pads; grid-template-rows: repeat(2, minmax(18px, 1fr)); gap: 3px; min-height: 0; }
+html body.view-lib .deck .pad { height: auto; min-height: 18px; }
+html body.view-lib .deck .pad-label { font-size: 10.5px; }
+html body.view-lib .deck .qloops { grid-area: loops; display: flex; flex-wrap: nowrap; gap: 2px; }
+html body.view-lib .deck .qloops .btn { flex: 1 1 0; min-width: 0; padding: 2px 0; font-size: 10px; }
+html body.view-lib .deck .qloops .btn.qloop.on { background: var(--ok-bg); border-color: var(--ok); color: #fff; }
+html body.view-lib .deck .transport { grid-area: trans; flex-direction: row; flex-wrap: nowrap; gap: 4px; }
+html body.view-lib .deck .transport .btn { flex: 1 1 0; height: 28px; font-size: 12px; }
+html body.view-lib .deck .platter-wrap { display: block; grid-area: plat; width: 100%; height: auto; aspect-ratio: 1; align-self: center; }
+/* tiempos transcurrido y restante encima del plato (en el de YouTube, abajo sobre el vídeo) */
+html body.view-lib .deck .deck-wave-panel { grid-area: plat; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+html body.view-lib .deck .deck-clock { width: auto; height: auto; padding: 0 3px; gap: 0; border: 0; border-radius: 3px; background: transparent; font: 700 12px var(--mono); color: #fff; }
+html body.view-lib .deck .deck-clock small { display: none; }
+html body.view-lib .deck .deck-clock.remain-clock { font-size: 11px; color: var(--platter-time); }
+html body.view-lib .deck.yt .deck-wave-panel { justify-content: flex-end; padding-bottom: 4px; }
+html body.view-lib .deck.yt .deck-clock { background: var(--wave-chip); }
+html body.view-lib .deck .range-btn { grid-area: prange; padding: 2px 0; font-size: 9.5px; }
+html body.view-lib .deck .fader.pitch { grid-area: pitch; height: auto; min-height: 56px; justify-self: center; }
+html body.view-lib .deck .pitch-pct { grid-area: ppct; align-self: center; text-align: center; font-size: 9px; white-space: nowrap; }
+html body.view-lib .deck .deck-meter { display: block; grid-area: meter; width: 8px; --mh: 200px; }
+html body.view-lib .deck.d0 .deck-meter .meter-fill { background: var(--meter0); background-size: 100% var(--mh); background-position: bottom; }
+html body.view-lib .deck.d1 .deck-meter .meter-fill { background: var(--meter1); background-size: 100% var(--mh); background-position: bottom; }
+@media (max-height: 820px) {
+  html body.view-lib .deck { padding-block: 4px 5px; }
+  html body.view-lib .deck .overview { height: 14px; }
+  html body.view-lib .deck .transport .btn { height: 26px; }
+}
+@media (max-width: 1400px) {
+  html body.view-lib .deck { --plat: 96px; }
+  html body.view-lib .deck .pad-tab { flex-basis: 36px; font-size: 8.5px; padding: 2px 1px; }
+  html body.view-lib .deck .deck-stats { gap: 5px; }
+}
+
+/* franjas plegables: grabación (nueva, usa la grabación de siempre), efectos y sampler (los de siempre) */
+.recbar { display: flex; align-items: center; gap: 14px; min-width: 0; height: 38px; padding: 4px 10px 4px 6px; background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--line2); border-radius: var(--radius); }
+.recbar.recording { border-top-color: var(--err); }
+.recbar .panel-title { color: var(--rec-text); }
+.rec-field { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.rec-dir { flex: 1 1 auto; }
+.rec-name { width: 210px; padding: 3px 7px; font-size: 12px; }
+.rec-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 11px var(--mono); color: var(--muted); }
+.rec-meters { display: inline-flex; flex-direction: column; gap: 3px; }
+.rec-lvl { display: block; width: 130px; height: 5px; border-radius: 3px; background: var(--wave-bg); border: 1px solid var(--line); overflow: hidden; }
+.rec-lvl b { display: block; height: 100%; clip-path: inset(0 100% 0 0); background: linear-gradient(90deg, #12a84a 0%, #2ee06a 62%, #ffd21a 82%, #ff3b47 95%); }
+.rec-clock { font: 700 14px var(--mono); color: var(--text); min-width: 52px; }
+.recbar.recording .rec-clock { color: var(--rec-text); }
+html body.view-lib #fxbar:not([hidden]) { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px; }
+body.view-lib .sampler-panel { padding: 4px 8px; gap: 4px; }
+body.view-lib .smp-play { height: 26px; }
+.strip-fold { align-self: center; }
+
+/* biblioteca: accesos rápidos y Explorar (género → BPM → artista) */
+body.view-lib .lib-quick { display: inline-flex; gap: 3px; flex: none; }
+.lib-qbtn { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border: 1px solid var(--side-btn-line); border-radius: 5px; font-size: 11.5px; font-weight: 600; color: var(--side-text); white-space: nowrap; cursor: pointer; }
+.lib-qbtn:hover { background: var(--hover); }
+.lib-qbtn.on { background: var(--sel); border-color: var(--sel-line); color: var(--sel-text); }
+.lib-qbtn:disabled { opacity: .45; cursor: default; }
+.lib-qbtn .qb-n { font: 10.5px var(--mono); color: var(--side-muted); }
+.lib-qbtn .qb-n:empty { display: none; }
+.lib-qbtn.on .qb-n { color: var(--sel-text); }
+/* sin sitio en la barra (≤ 1600 px): solo icono (el nombre, en el texto de ayuda) y el buscador conserva su ancho */
+@media (max-width: 1600px) {
+  body.view-lib .lib-qbtn .qb-l { display: none; }
+  body.view-lib .lib-toolbar .search { min-width: 150px; }
+  body.view-lib .lib-toolbar .view-head { flex: 0 1 auto; min-width: 70px; }
+}
+.lib-qbtn:focus-visible, .ex-item:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: -1px; }
+.lib-explore { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 6px; height: 158px; padding: 6px 8px; border-bottom: 1px solid var(--side-line); }
+.ex-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--side-bg); border: 1px solid var(--side-line); border-radius: var(--radius); overflow: hidden; }
+.ex-head { padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--side-line); }
+.ex-list { flex: 1; min-height: 0; overflow: auto; }
+.ex-item { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 21px; padding: 0 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.ex-item span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-item small { flex: none; font: 11px var(--mono); color: var(--muted); }
+.ex-item:hover { background: rgba(255, 255, 255, .05); }
+.ex-item.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); color: var(--sel-text); }
+.ex-item.on small { color: var(--sel-text); }
+.ex-more { margin: 4px 8px; font-size: 11px; color: var(--muted); }
+.ex-close { align-self: start; }
+
+/* densidad Compacta: filas de 23 px y letra de 13 px; árbol de crates con filas de 21 px */
+@media (min-width: 1101px) {
+  body.view-lib #library { --lib-max: 99; }
+  #library.dense:not(.rail-on) { grid-template-columns: var(--side-w, 236px) minmax(0, 1fr); }
+}
+#library.dense .lib-toolbar { min-height: 34px; padding: 4px 8px; gap: 6px; }
+#library.dense .view-title { font-size: 13.5px; }
+#library.dense .lib-toolbar input.search { padding: 4px 8px; }
+#library.dense .lib-head { padding: 0 6px; }
+#library.dense .th { padding: 4px 4px; }
+#library.dense .row-t { padding: 0 6px; }
+#library.dense .row-t > span { padding: 0 4px; font-size: 13px; }
+#library.dense .row-t .num { font-size: 12px; }
+#library.dense .row-t .rating { font-size: 11px; }
+#library.dense .side-head { gap: 4px; padding: 5px 6px 4px; }
+#library.dense .side-find { height: 26px; gap: 6px; padding: 0 8px; }
+#library.dense .side-find input.side-search { font-size: 12px; }
+#library.dense .side-rail-btn { width: 26px; height: 26px; }
+#library.dense .lib-tree { padding: 0 4px 4px; }
+#library.dense .side-group { gap: 0; }
+#library.dense .side-sec { height: 24px; padding: 4px 4px 0 6px; }
+#library.dense .sec-title { font-size: 10px; }
+#library.dense .sec-btn { height: 20px; padding: 0 6px; font-size: 11px; }
+#library.dense .sec-btn.sec-ico { width: 20px; padding: 0; }
+#library.dense .side-item { height: 21px; gap: 5px; padding: 0 4px 0 calc(2px + var(--depth, 0) * 14px); border-radius: 4px; font-size: 12.5px; }
+#library.dense .si-ico { width: 14px; height: 14px; }
+#library.dense .si-tw { width: 12px; height: 16px; }
+#library.dense .si-tw svg { width: 11px; height: 11px; }
+#library.dense .si-count { font-size: 10.5px; }
+#library.dense .side-foot { gap: 6px; padding: 5px 6px; }
+#library.dense .side-btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+/* 17. Arranque sin MIDI, panel Archivos, campos del buscador y carpeta de grabación ------------------- */
+/* aviso discreto si la controladora no responde (abajo a la izquierda; los avisos normales van a la derecha) */
+.midi-notice { position: fixed; left: 16px; bottom: 32px; z-index: 300; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); padding: 7px 8px 7px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--warn); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
+.midi-notice span { min-width: 0; }
+/* Controladora nueva sin perfil: asistente, mapeo de Mixxx o «Ahora no» (app.js → showControllerNotice) */
+.ctl-notice { position: fixed; right: 16px; bottom: 32px; z-index: 300; display: flex; flex-direction: column; gap: 8px; width: min(440px, calc(100vw - 32px)); padding: 10px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--ok, #3ddc84); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
+.ctl-notice + .ctl-notice { bottom: 150px; }
+.ctl-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.ctl-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.dev-list li.ctl-dev { margin-bottom: 8px; }
+.ctl-dev-actions { flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ctl-dev-actions label { display: inline-flex; align-items: center; gap: 6px; }
+.ctl-models { margin: 0 0 8px; padding-left: 18px; font-size: 12.5px; }
+.ctl-models li { margin-bottom: 3px; }
+.status-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+/* panel Archivos: barra (ruta, número de archivos y «Añadir esta carpeta») y columnas desplazables */
+.lib-files { display: flex; flex-direction: column; gap: 5px; height: 186px; padding: 6px 8px; border-bottom: 1px solid var(--side-line); flex: none; }
+.fb-bar { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fb-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
+.fb-status { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.fb-add { flex: none; }
+.fb-cols { flex: 1; min-height: 0; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.fb-col { flex: 0 0 210px; display: flex; flex-direction: column; min-height: 0; background: var(--side-bg); border: 1px solid var(--side-line); border-radius: var(--radius); overflow: hidden; }
+.fb-roots { flex-basis: 230px; }
+.fb-head { display: flex; justify-content: space-between; gap: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--side-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-head small { font: 10px var(--mono); }
+.fb-list { flex: 1; min-height: 0; overflow: auto; }
+.fb-sep { padding: 5px 8px 2px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.fb-item { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; height: 22px; padding: 0 6px 0 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.fb-item i { flex: none; width: 14px; font-style: normal; text-align: center; color: var(--muted); }
+.fb-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-item b { flex: none; color: var(--muted); font-weight: 400; }
+.fb-item:hover { background: var(--hover); }
+.fb-item.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); color: var(--sel-text); }
+.fb-item.on i, .fb-item.on b { color: var(--sel-text); }
+.fb-item.loading span::after { content: ' …'; }
+.fb-item.off { opacity: .55; }
+.fb-item:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: -1px; }
+.fb-note { margin: 6px 8px; font-size: 11.5px; color: var(--muted); }
+.fb-note.warn { color: var(--warn); }
+#library.dense .lib-files { height: 172px; }
+#library.dense .fb-item { height: 20px; font-size: 12px; }
+/* archivos que no están en la biblioteca: más apagados y con ◌ */
+.row-t.ext > span { opacity: .62; }
+.row-t.ext.sel > span, .row-t.ext.cur > span { opacity: .85; }
+.st.ext { color: var(--muted); }
+
+/* campos del buscador: icono junto al buscador (marcado si hay campos desmarcados) y desplegable con casillas */
+.search-fields { all: unset; box-sizing: border-box; position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--side-btn-line); border-radius: 5px; color: var(--muted); cursor: pointer; }
+.search-fields:hover { background: var(--hover); color: var(--text); }
+.search-fields.on { color: var(--sel-text); background: var(--sel); border-color: var(--sel-line); }
+.search-fields .sf-dot { display: none; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.search-fields.on .sf-dot { display: block; }
+.search-fields:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: 1px; }
+#library.dense .search-fields { width: 24px; height: 24px; }
+.sf-menu { position: fixed; z-index: 400; min-width: 170px; padding: 4px 0 6px; background: var(--panel3); border: 1px solid var(--line2); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+.sf-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 8px 5px 10px; font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.sf-opt { display: flex; align-items: center; gap: 8px; padding: 3px 10px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.sf-opt:hover { background: var(--hover); }
+
+/* carpeta de grabación */
+.rec-where.warn, .set-path.warn { color: var(--warn); }
+.set-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.set-path { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font: 11.5px var(--mono); color: var(--muted); }

@@ -34,7 +34,14 @@ contextBridge.exposeInMainWorld('nexura', {
   },
   waveGet: (id) => ipcRenderer.invoke('wave:get', id),
   waveSet: (id, data) => ipcRenderer.invoke('wave:set', id, data),
-  saveRecording: (data, name) => ipcRenderer.invoke('rec:save', data, name),
+  saveRecording: (data, name, dir) => ipcRenderer.invoke('rec:save', data, name, dir),
+  recPickDir: (current) => ipcRenderer.invoke('rec:pickDir', current),
+  recCheckDir: (dir) => ipcRenderer.invoke('rec:checkDir', dir),
+  files: {
+    roots: () => ipcRenderer.invoke('files:roots'),
+    list: (dir) => ipcRenderer.invoke('files:list', dir),
+    meta: (paths) => ipcRenderer.invoke('files:meta', paths)
+  },
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   log: (lines) => ipcRenderer.send('log:write', lines),

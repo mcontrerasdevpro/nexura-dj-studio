@@ -49,7 +49,7 @@ export class SamplerUI {
       cell.addEventListener('drop', async (e) => {
         e.preventDefault(); cell.classList.remove('drop');
         const id = e.dataTransfer.getData('text/nexura-track');
-        if (id) { const t = this.app.library.get(id.split(',')[0]); if (t && t.source === 'local') await s.loadSlot(i, t.path, t.title); }
+        if (id) { const t = this.app.library.getAny(id.split(',')[0]); if (t && t.source === 'local') await s.loadSlot(i, t.path, t.title); }
         else if (e.dataTransfer.files.length) {
           const infos = await this.app.platform.filesFromDrop(e.dataTransfer.files);
           if (infos[0]) await s.loadSlot(i, infos[0].path, infos[0].title);

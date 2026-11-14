@@ -1,15 +1,26 @@
-# Publicar una versión: al subir una etiqueta vX.Y.Z (p. ej. v1.0.0 o v1.0.0-rc.2) se pasan las pruebas,
-# se genera el instalador de Windows y se sube a un BORRADOR de GitHub Release (con latest.yml para las
-# actualizaciones automáticas). Después se revisa el borrador en GitHub y se publica a mano.
+# Publicar una versión de forma automática.
+#
+# Al fusionar en main un cambio que sube la versión de package.json (p. ej. 1.0.0-rc.6), si todavía no existe
+# la etiqueta v<versión>: se pasan las pruebas, se genera el instalador de Windows, se sube a GitHub Release
+# (con latest.yml para las actualizaciones automáticas), se ponen como notas la sección de esa versión de
+# src/legal/NOVEDADES.md y se publica. Las versiones con -rc, -beta o -alpha se marcan como «versión previa».
+# Si la versión no ha cambiado (ya existe su etiqueta), no se hace nada.
+#
+# También se puede lanzar a mano (Actions → Publicar versión → Run workflow) o subiendo una etiqueta v*.
 name: Publicar versión
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: publicar
+  cancel-in-progress: false
 
 jobs:
   publicar:
@@ -18,24 +29,75 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: ¿Hay versión nueva?
+        id: v
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [ "v$v" != "$GITHUB_REF_NAME" ]; then echo "La etiqueta $GITHUB_REF_NAME no coincide con la versión v$v de package.json"; exit 1; fi
+            echo "nueva=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Ya publicada: existe la etiqueta o una release (no borrador) con esa versión
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null 2>&1; then
+            echo "La versión v$v ya está publicada: no se hace nada."; echo "nueva=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if gh release view "v$v" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
+            echo "La versión v$v ya está publicada: no se hace nada."; echo "nueva=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Versión nueva: v$v"; echo "nueva=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v5
+        if: steps.v.outputs.nueva == 'true'
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+
+      - name: Instalar dependencias
+        if: steps.v.outputs.nueva == 'true'
+        run: npm ci
+
       - name: Pruebas
+        if: steps.v.outputs.nueva == 'true'
         run: node tools/test-todo.cjs
-      - name: Comprobar que la etiqueta coincide con la versión
-        if: startsWith(github.ref, 'refs/tags/v')
+
+      - name: Notas de la versión (desde NOVEDADES.md)
+        if: steps.v.outputs.nueva == 'true'
         shell: bash
-        run: |
-          v=$(node -p "require('./package.json').version")
-          if [ "v$v" != "${GITHUB_REF_NAME}" ]; then echo "La etiqueta ${GITHUB_REF_NAME} no coincide con la versión v$v de package.json"; exit 1; fi
-      - name: Generar y subir el instalador (borrador)
+        run: node tools/notas-version.cjs "${{ steps.v.outputs.version }}" > notas-version.md && cat notas-version.md
+
+      - name: Generar y subir el instalador
+        if: steps.v.outputs.nueva == 'true'
         run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar la versión
+        if: steps.v.outputs.nueva == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${{ steps.v.outputs.version }}"
+          previa=""
+          if [[ "$v" == *-* ]]; then previa="--prerelease"; fi
+          gh release edit "v$v" --title "Nexura DJ Studio $v" --notes-file notas-version.md --target "$GITHUB_SHA" --draft=false $previa
+          # Comprobación: el actualizador de la app necesita latest.yml
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -L "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$v/latest.yml")
+            if [ "$code" = "200" ]; then echo "latest.yml OK"; exit 0; fi
+            sleep 10
+          done
+          echo "latest.yml no responde 200 ($code)"; exit 1
+
       - uses: actions/upload-artifact@v4
+        if: steps.v.outputs.nueva == 'true'
         with:
           name: instalador
           path: |

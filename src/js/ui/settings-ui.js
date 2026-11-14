@@ -11,6 +11,8 @@ import { THEMES } from './theme.js';
 
 const TABS = { general: 'General', audio: 'Audio', ai: '✨ IA', play: 'Reproducción', library: 'Biblioteca', midi: 'MIDI / Controladores', expansions: 'Expansiones', youtube: 'YouTube', spotify: 'Spotify', keys: 'Atajos', about: 'Acerca de' };
 const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+// Lista oficial de controladoras con mapeo en el manual de Mixxx (solo se enlaza: el usuario descarga su archivo)
+export const MIXXX_CONTROLLERS_URL = 'https://manual.mixxx.org/latest/en/hardware/manuals';
 const BACKUP_REASONS = { auto: 'Automática', manual: 'Manual', actualizacion: 'Antes de actualizar', 'antes-de-restaurar': 'Antes de restaurar', limpieza: 'Antes de limpiar la biblioteca' };
 
 export class SettingsUI {
@@ -153,8 +155,23 @@ export class SettingsUI {
       this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps regulares (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
       ...this.gpuRows(gpu, gpuOn, gpuText),
       el('h3', {}, 'Grabación'),
-      el('p', { class: 'hint' }, `Las grabaciones (WAV) se guardan en: ${app.info.recordings}`),
+      ...this.recDirRows(),
       btn('Probar salida (tono 1 s)', { cls: 'small', onClick: () => this.testTone() })].filter(Boolean));
+  }
+  // Carpeta de grabación: la de siempre o la elegida con «Cambiar…» (también en la franja de grabación)
+  recDirRows() {
+    const app = this.app, custom = !!app.settings.recDir, bad = app.recDirProblem;
+    const where = el('span', { class: 'set-path rec-dir-path' + (bad ? ' warn' : '') }, app.recFolder() || '—');
+    const box = el('div', { class: 'set-inline' }, where);
+    if (platform.recDir.available) {
+      box.append(btn('Cambiar…', { cls: 'small rec-dir-change', onClick: async () => { await app.chooseRecDir(); this.render(); } }));
+      if (custom) box.append(btn('Usar la de siempre', { cls: 'small', onClick: () => { app.resetRecDir(); this.render(); } }));
+    }
+    const hint = bad ? `La carpeta elegida ${bad === 'missing' ? 'ya no existe' : 'no admite escritura'}: mientras no la cambies, se graba en la de siempre (${app.info.recordings})`
+      : custom ? `La de siempre: ${app.info.recordings}` : 'WAV, con el nombre de la mezcla y la fecha y la hora';
+    // si la carpeta elegida ha dejado de servir desde que se abrió la ventana, se vuelve a pintar con el aviso
+    if (custom && platform.recDir.available) app.checkRecDir().then(() => { if (this.body && this.tab === 'audio' && (app.recDirProblem || '') !== (bad || '')) this.render(); });
+    return [this.row('Carpeta de las grabaciones', box, hint)];
   }
   // «Aceleración por GPU»: Automática / Desactivada. Se guarda en arranque.json (main.js) y se aplica al
   // reiniciar la app; mientras tanto se avisa y se ofrece «Reiniciar ahora»
@@ -273,6 +290,8 @@ export class SettingsUI {
     p.append(
       el('h3', {}, 'Biblioteca'),
       this.row('Proteger biblioteca', this.toggle('protectLibrary'), 'No se pueden borrar ni renombrar pistas, crates ni smart crates, ni editar etiquetas, valoraciones, BPM o beatgrid, ni mover pistas entre crates. Sí se puede cargar, buscar, ordenar, analizar pistas nuevas y usar Prepare e Historial. También con el candado 🔒 de la biblioteca'),
+      this.row('Vista de la pantalla', select({ mix: 'Mezcla (decks y mezclador grandes)', lib: 'Biblioteca (decks compactos y más pistas a la vista)' }, app.screenView || 'mix', (v) => app.setScreenView(v)), 'También con el botón ▤ BIBLIOTECA de la barra superior o con F10. Al cambiar de vista no se corta nada: los decks siguen sonando'),
+      this.row('Densidad de la biblioteca', select({ auto: 'Automática (Compacta en la vista Biblioteca)', normal: 'Normal', compact: 'Compacta' }, s.libDensity || 'auto', (v) => app.setSetting('libDensity', v)), 'Compacta: filas finas de 23 px, letra de 13 px y el árbol de crates más apretado, para ver muchas más pistas a la vez'),
       this.row('Mismas columnas en todos los crates', this.toggle('libColsSame'), 'Si lo desactivas, cada crate recuerda sus columnas (clic derecho en la cabecera de la tabla para elegirlas)'),
       this.row('Tamaño de la carátula', select({ small: 'Pequeña', medium: 'Mediana' }, s.libArtSize || 'small', (v) => app.setSetting('libArtSize', v)), 'La columna «Carátula» está oculta por defecto'),
       this.row('Barra de iconos en la biblioteca', select({ auto: 'Automática', on: 'Siempre', off: 'Nunca' }, s.libRail || 'auto', (v) => app.setSetting('libRail', v)), 'Columna de iconos (Todas, IA, Prepare, Crates, Smart, YouTube, Spotify, Historial) junto al árbol. Automática: en modo laptop y con la ventana de 1100 px de ancho o menos. También con el botón pequeño junto al buscador de la barra lateral'),
@@ -335,17 +354,33 @@ export class SettingsUI {
     const dev = this.midiDev;
     const prof = dev ? m.getProfile(dev) : null;
     const nMapped = prof ? Object.keys(prof.map).length : 0;
-    const wizard = () => { this.wizard = this.wizard || new MidiWizard(app); this.wizard.open(dev); };
+    const wizard = () => this.openWizard(dev);
 
+    // Cada controladora conectada: perfil que usa (incluido, asistente, importado o ninguno) y cómo cambiarlo
     const devs = m.devices.length ? m.devices.filter(d => d.state === 'connected').map(d => {
-      const p2 = m.getProfile(d.name), n = Object.keys(p2.map).length;
-      const detected = m.catalog.match(d.name) || m.catalog.genericMatch(d.name);
-      const txt = d.native ? `reconocida automáticamente${n ? ` + ${n} controles personalizados` : ''}` :
-        n ? `${n} controles configurados${p2.source === 'mixxx' ? ' (importado de Mixxx)' : ''}` :
-        `sin configurar${detected ? ` · familia ${detected.name}` : ''} — usa «Añadir controladora»`;
-      return el('li', { class: n || d.native ? 'ok' : '' }, el('b', {}, d.name), ' — ' + txt);
+      const info = m.profileInfo(d.name);
+      const txt = info.label + (info.custom && info.type === 'incluido' ? ` + ${info.custom} controles propios` : info.custom ? ` (${info.custom} controles)` : '') +
+        (info.type === 'ninguno' ? `${info.family ? ` · marca ${info.family}` : ''} — usa el asistente o importa un mapeo de Mixxx` : '');
+      const picker = d.native ? null : (() => {
+        const opts = { '': `Automático${m.catalog.match(d.name) ? ` (${m.catalog.match(d.name).name})` : ' (ninguno reconocido)'}` };
+        for (const p of m.catalog.models) opts[p.id] = p.name;
+        opts.none = 'Ninguno (solo mis asignaciones)';
+        const s = select(opts, (app.settings.midiBuiltIn || {})[d.name] || '', (v) => { m.setBuiltIn(d.name, v); this.render(); }, 'ctl-profile');
+        s.setAttribute('aria-label', `Perfil incluido de ${d.name}`);
+        return s;
+      })();
+      return el('li', { class: 'ctl-dev' + (info.type !== 'ninguno' ? ' ok' : ''), 'data-dev': d.name, 'data-type': info.type },
+        el('div', {}, el('b', {}, d.name), ' — ', el('span', { class: 'ctl-type' }, txt)),
+        el('div', { class: 'row ctl-dev-actions' },
+          picker ? el('label', { class: 'hint' }, 'Perfil incluido: ', picker) : null,
+          btn(info.custom ? 'Reconfigurar con el asistente' : 'Configurar con el asistente', { cls: 'micro', onClick: () => this.openWizard(d.name) }),
+          btn('Importar mapeo de Mixxx', { cls: 'micro', onClick: () => this.mixxxDialog(d.name) }),
+          info.type === 'ninguno' && (app.settings.midiDismissed || []).includes(d.name)
+            ? btn('Mostrar el aviso de configuración', { cls: 'micro ctl-reopen', onClick: () => { app.closeModal(); app.reopenControllerNotice(d.name); } }) : null));
     }) : [];
-    if (!devs.length) devs.push(el('li', {}, m.status === 'unsupported' ? 'Web MIDI no disponible' : 'No hay dispositivos MIDI conectados. Conecta la controladora por USB.'));
+    if (!devs.length && m.status === 'timeout') devs.push(el('li', { class: 'warn' }, 'La controladora no responde (Windows no contesta al pedir el acceso MIDI). Reconéctala o pulsa ',
+      btn('Reintentar', { cls: 'micro', onClick: () => m.retry().then(() => this.render()) }), '. La app lo reintenta sola cada 20 s.'));
+    if (!devs.length) devs.push(el('li', {}, m.status === 'unsupported' ? 'Web MIDI no disponible' : m.status === 'waiting' ? 'Esperando respuesta de MIDI…' : 'No hay dispositivos MIDI conectados. Conecta la controladora por USB.'));
 
     const monitor = el('div', { class: 'midi-monitor' });
     const renderMon = () => {
@@ -393,41 +428,25 @@ export class SettingsUI {
     this.offMsg = () => { offMsg(); offLearn(); };
     renderList();
 
-    const pickFile = (accept, cb) => {
-      const file = document.createElement('input'); file.type = 'file'; file.accept = accept;
-      file.onchange = async () => { try { await cb(await file.files[0].text(), file.files[0].name); } catch (e) { toast(e.message, 'error', 7000); } };
-      file.click();
-    };
-    const importMixxx = () => {
-      if (!dev) return toast('Conecta la controladora de destino primero', 'warn');
-      pickFile('.xml,.midi.xml,text/xml', async (text) => {
-        const r = parseMixxxMapping(text, app.actions);
-        const n = Object.keys(r.map).length;
-        if (!n) throw new Error('No se encontró ningún control traducible en ese mapeo de Mixxx.');
-        m.applyProfile(dev, r, true);
-        this.render();
-        const rp = r.report;
-        const body = el('div', { class: 'form' },
-          el('p', {}, `«${r.name}»${r.author ? ' de ' + r.author : ''} aplicado a ${dev}.`),
-          el('ul', { class: 'fb-list' },
-            el('li', {}, `${n} controles importados (${rp.mappedActions} funciones) y ${rp.leds} LEDs.`),
-            rp.scripted ? el('li', {}, `${rp.scripted} controles usan scripts de Mixxx y no se pueden traducir automáticamente${rp.scriptedNames.length ? ' (p. ej. ' + rp.scriptedNames.slice(0, 5).join(', ') + ')' : ''}.`) : null,
-            rp.unsupported.length ? el('li', {}, `${rp.unsupported.length} controles de funciones que esta app no tiene o de los decks 3/4.`) : null,
-            !rp.hasJog ? el('li', {}, 'El jog no venía en el mapeo (en Mixxx suele ir por script): configúralo con el asistente.') : null),
-          el('p', { class: 'hint' }, 'Con «Añadir controladora» puedes completar lo que falte; marca «Conservar las asignaciones» y salta los controles que ya funcionen.'));
-        const c = await app.modal('Mapeo de Mixxx importado', body, ['Cerrar', 'Abrir el asistente']);
-        if (c === 1) wizard(); else app.settingsUI.open('midi');
-      });
-    };
+    const pickFile = (accept, cb) => this.pickFile(accept, cb);
+
+    // Modelos con perfil incluido (además de los que se configuran con el asistente o un mapeo de Mixxx)
+    const feats = (pr) => [pr.leds.length ? 'LEDs' : '', pr.vu.length ? 'vúmetros' : '', pr.decks === 4 ? '4 decks' : ''].filter(Boolean).join(', ');
+    const models = el('ul', { class: 'ctl-models' },
+      el('li', {}, el('b', {}, 'Denon DJ MC4000'), ' — perfil nativo (LEDs, vúmetros y jog calibrado)'),
+      ...m.catalog.models.map(pr => el('li', {}, el('b', {}, pr.name), ` — ${pr.mappings.length} controles${feats(pr) ? ` · ${feats(pr)}` : ''} · `,
+        el('a', { href: '#', class: 'link', onclick: (e) => { e.preventDefault(); app.platform.openExternal(pr.source); } }, 'documentación MIDI del fabricante'))));
 
     p.append(...[
-      el('h3', {}, 'Dispositivos conectados'), el('ul', { class: 'dev-list' }, ...devs),
-      el('p', { class: 'hint' }, 'Funciona con cualquier controladora o mesa de mezclas que use MIDI por USB (Pioneer, Numark, Hercules, Reloop, Denon, Traktor, Behringer, Allen & Heath…). Algunos modelos se reconocen automáticamente; para los demás, usa el asistente o importa el mapeo de Mixxx de tu modelo. Las controladoras que funcionan solo por HID (sin MIDI) no son compatibles.'),
+      el('h3', {}, 'Controladoras conectadas'), el('ul', { class: 'dev-list' }, ...devs),
+      el('p', { class: 'hint' }, 'Funciona con cualquier controladora o mesa de mezclas que use MIDI por USB (Pioneer, Numark, Hercules, Reloop, Denon, Traktor, Behringer, Allen & Heath…). Los modelos de la lista de abajo se reconocen y se configuran solos; para los demás, usa el asistente o importa el mapeo de Mixxx de tu modelo. Las controladoras que funcionan solo por HID (sin MIDI) no son compatibles.'),
       names.length > 1 ? this.row('Configurar', select(Object.fromEntries(names.map(n => [n, n])), dev, (v) => { this.midiDev = v; m.cancelLearn(); this.render(); })) : null,
       el('div', { class: 'row' },
         btn('➕ Añadir controladora (asistente)', { cls: 'small primary', onClick: () => { if (!dev) return toast('Conecta la controladora por USB primero', 'warn'); wizard(); } }),
-        btn('Importar mapeo de Mixxx (.midi.xml)', { cls: 'small', onClick: importMixxx })),
-      el('p', { class: 'hint' }, 'Los mapeos de Mixxx están en la carpeta «controllers» de Mixxx o en su web (github.com/mixxxdj/mixxx/tree/main/res/controllers). Se traducen los controles directos; lo que dependa de scripts se completa con el asistente.'),
+        btn('Importar mapeo de Mixxx (.midi.xml)', { cls: 'small', onClick: () => this.importMixxx(dev) })),
+      el('p', { class: 'hint' }, 'Los mapeos de Mixxx se descargan de su página oficial de controladoras (', el('a', { href: '#', class: 'link', onclick: (e) => { e.preventDefault(); app.platform.openExternal(MIXXX_CONTROLLERS_URL); } }, 'manual de Mixxx → controladoras'), ') o están en la carpeta «controllers» de Mixxx si lo tienes instalado. Se traducen los controles directos; lo que dependa de scripts se completa con el asistente.'),
+      el('h3', {}, 'Modelos con perfil incluido'), models,
+      el('p', { class: 'hint' }, 'Perfiles hechos con la documentación MIDI pública de cada fabricante. Si un control de tu modelo no responde o va al revés, cámbialo con «Aprender» o ⇅ en la lista de abajo: tus asignaciones mandan sobre el perfil incluido.'),
       dev && !m.isNative(dev) ? this.row('LEDs de la controladora', (() => {
         const t = el('input', { type: 'checkbox', class: 'switch' }); t.checked = !prof.ledsOff;
         t.addEventListener('change', () => m.setLedsEnabled(dev, t.checked)); return t;
@@ -455,6 +474,55 @@ export class SettingsUI {
           if (await app.confirm(`¿Borrar todas las asignaciones de ${dev}?`)) { m.clearDevice(dev); m.clearUserMap(); }
           app.settingsUI.open('midi');
         } }))].filter(Boolean));
+  }
+
+  // ---------------------------------------------------------------- configurar una controladora (también desde el aviso al conectarla)
+  openWizard(dev) {
+    this.wizard = this.wizard || new MidiWizard(this.app);
+    return this.wizard.open(dev);
+  }
+
+  pickFile(accept, cb) {
+    const file = document.createElement('input'); file.type = 'file'; file.accept = accept;
+    file.onchange = async () => { try { await cb(await file.files[0].text(), file.files[0].name); } catch (e) { toast(e.message, 'error', 7000); } };
+    file.click();
+  }
+
+  // Aviso de controladora sin perfil → «Importar un mapeo de Mixxx»: de dónde sacarlo y el selector de archivo
+  async mixxxDialog(dev) {
+    const app = this.app;
+    const link = el('a', { href: '#', class: 'link mixxx-link', onclick: (e) => { e.preventDefault(); app.platform.openExternal(MIXXX_CONTROLLERS_URL); } }, 'Página oficial de controladoras de Mixxx');
+    const body = el('div', { class: 'form' },
+      el('p', {}, `Si Mixxx (programa de DJ gratuito) tiene un mapeo para tu ${dev || 'controladora'}, puedes cargarlo aquí: Nexura traduce los controles directos.`),
+      el('ol', { class: 'fb-list' },
+        el('li', {}, 'Busca tu modelo en la ', link, ' y descarga su archivo .midi.xml (o búscalo en la carpeta «controllers» de Mixxx si lo tienes instalado).'),
+        el('li', {}, 'Pulsa «Elegir archivo…» y selecciónalo.')),
+      el('p', { class: 'hint' }, 'Lo que en Mixxx funciona con scripts (a menudo el jog) se completa después con el asistente.'));
+    const c = await app.modal('Importar un mapeo de Mixxx', body, ['Cancelar', 'Elegir archivo…']);
+    if (c === 1) this.importMixxx(dev);
+  }
+
+  importMixxx(dev) {
+    const app = this.app, m = app.midi;
+    if (!dev) return toast('Conecta la controladora de destino primero', 'warn');
+    this.pickFile('.xml,.midi.xml,text/xml', async (text) => {
+      const r = parseMixxxMapping(text, app.actions);
+      const n = Object.keys(r.map).length;
+      if (!n) throw new Error('No se encontró ningún control traducible en ese mapeo de Mixxx.');
+      m.applyProfile(dev, r, true);
+      this.render();
+      const rp = r.report;
+      const body = el('div', { class: 'form' },
+        el('p', {}, `«${r.name}»${r.author ? ' de ' + r.author : ''} aplicado a ${dev}.`),
+        el('ul', { class: 'fb-list' },
+          el('li', {}, `${n} controles importados (${rp.mappedActions} funciones) y ${rp.leds} LEDs.`),
+          rp.scripted ? el('li', {}, `${rp.scripted} controles usan scripts de Mixxx y no se pueden traducir automáticamente${rp.scriptedNames.length ? ' (p. ej. ' + rp.scriptedNames.slice(0, 5).join(', ') + ')' : ''}.`) : null,
+          rp.unsupported.length ? el('li', {}, `${rp.unsupported.length} controles de funciones que esta app no tiene o de los decks 3/4.`) : null,
+          !rp.hasJog ? el('li', {}, 'El jog no venía en el mapeo (en Mixxx suele ir por script): configúralo con el asistente.') : null),
+        el('p', { class: 'hint' }, 'Con «Añadir controladora» puedes completar lo que falte; marca «Conservar las asignaciones» y salta los controles que ya funcionen.'));
+      const c = await app.modal('Mapeo de Mixxx importado', body, ['Cerrar', 'Abrir el asistente']);
+      if (c === 1) this.openWizard(dev); else this.open('midi');
+    });
   }
 
   page_expansions(p) {
@@ -594,7 +662,7 @@ export class SettingsUI {
       ['Quitar de la crate / de Prepare (en «Todas las pistas»: eliminar de la biblioteca)', 'Supr'], ['Eliminar de la biblioteca al instante, sin preguntar (pistas seleccionadas, desde cualquier vista; los archivos no se borran)', 'Ctrl + Supr'], ['Eliminar la lista de YouTube con el foco en la barra lateral (en «YouTube · todos los vídeos»: quitar todos los vídeos; pide confirmación)', 'Supr'], ['Deshacer lo último quitado o eliminado', 'Ctrl + Z'], ['Cargar en deck 1 / 2', 'Mayús + ← / Mayús + →'], ['Cambiar panel', 'Tab / ← / →'],
       ['Zoom de la forma de onda: acercar / alejar', '+ / − (también la rueda del ratón sobre la onda)'],
       ['Buscar', 'Ctrl + F'], ['Grabar', 'F9'], ['Pantalla completa', 'F11'], ['Herramientas de desarrollo', 'F12'],
-      ['Modo laptop', 'F8 (activar/desactivar)'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
+      ['Modo laptop', 'F8 (activar/desactivar)'], ['Vista Mezcla / Biblioteca', 'F10'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
       ['EQ kill', 'Clic derecho sobre HI/MID/LOW'], ['Ajuste fino de knobs/faders', 'Mayús + arrastrar'], ['Valor por defecto', 'Doble clic']
     ];
     p.append(el('h3', {}, 'Teclado y ratón'), el('table', { class: 'keys' }, ...rows.map(([a, b]) => el('tr', {}, el('td', {}, a), el('td', {}, el('kbd', {}, b))))));

@@ -46,7 +46,7 @@ export class Feedback {
   // Lo que la app sabe de la sesión (sin datos personales)
   context() {
     const a = this.app;
-    return { controller: a.midi?.controllerName || '', decks: a.deckCount === 4 ? 4 : 2, perf: a.perfDiag ? a.perfDiag.snapshot() : null };
+    return { controller: a.midi?.controllerName || '', controllers: a.midi ? a.midi.controllerSummary : [], decks: a.deckCount === 4 ? 4 : 2, perf: a.perfDiag ? a.perfDiag.snapshot() : null };
   }
   // Títulos, artistas, nombres de archivo y de crates: se quitan del registro antes de enviarlo
   knownNames() {
@@ -63,7 +63,9 @@ export class Feedback {
   }
 
   techText(t) {
-    return [`Versión: ${t.version}`, `Sistema: ${t.os}`, `Controladora MIDI: ${t.controller}`, `Decks: ${t.decks}`,
+    const types = { incluido: 'perfil incluido', asistente: 'configurada con el asistente o MIDI Learn', importado: 'mapeo importado', ninguno: 'sin perfil' };
+    const ctls = (t.controllers || []).map(c => `${c.port} (${types[c.type] || 'sin perfil'}${c.model && c.type === 'incluido' ? ': ' + c.model : ''})`).join(' · ') || 'ninguna';
+    return [`Versión: ${t.version}`, `Sistema: ${t.os}`, `Controladora MIDI: ${t.controller}`, `Controladoras conectadas: ${ctls}`, `Decks: ${t.decks}`,
       ...(t.perfLines && t.perfLines.length ? ['Diagnóstico de rendimiento:', ...t.perfLines] : []),
       `Últimas ${t.log.length} líneas del registro:`, ...(t.log.length ? t.log : ['(vacío)'])].join('\n');
   }
@@ -74,6 +76,9 @@ export class Feedback {
     kind.id = 'fb-kind';
     const text = el('textarea', { id: 'fb-text', class: 'wide fb-text', rows: 7, placeholder: 'Cuéntanos qué pasó o qué te gustaría. Si es un error: qué estabas haciendo, qué esperabas y qué ocurrió.' });
     const email = el('input', { id: 'fb-email', class: 'wide', type: 'email', autocomplete: 'email', placeholder: 'tu@email.com (opcional, solo para responderte)' });
+    // «¿Qué controladora usas?» (opcional): se rellena con la conectada, si la hay
+    const ctl = el('input', { id: 'fb-controller', class: 'wide', type: 'text', maxlength: 80, autocomplete: 'off', placeholder: 'p. ej. Pioneer DDJ-400, Hercules Inpulse 300… (opcional)' });
+    ctl.value = app.midi?.controllerName || '';
     const attach = el('input', { id: 'fb-attach', type: 'checkbox', class: 'switch' });
     attach.checked = true;
     const preview = el('pre', { class: 'fb-preview', id: 'fb-preview', tabindex: 0 }, 'Preparando…');
@@ -86,13 +91,14 @@ export class Feedback {
     loadPreview();
     const box = el('div', { class: 'fb-attach-box' },
       el('label', { class: 'fb-check', for: 'fb-attach' }, attach, el('span', {}, 'Adjuntar registro técnico')),
-      el('p', { class: 'hint' }, 'Se adjunta exactamente lo que ves abajo: versión, Windows, controladora MIDI conectada, un diagnóstico de rendimiento (procesador, memoria, tarjeta gráfica, número de pistas, ajustes de rendimiento y fluidez de la forma de onda en los últimos minutos) y las últimas 200 líneas del registro de la app. Las rutas de archivos, los nombres de canciones, artistas y crates y los correos se sustituyen por <ruta>, <pista>, «…» o <email>.'),
+      el('p', { class: 'hint' }, 'Se adjunta exactamente lo que ves abajo: versión, Windows, controladora MIDI conectada (nombre del puerto MIDI y tipo de perfil: incluido, asistente, importado o ninguno), un diagnóstico de rendimiento (procesador, memoria, tarjeta gráfica, número de pistas, ajustes de rendimiento y fluidez de la forma de onda en los últimos minutos) y las últimas 200 líneas del registro de la app. Las rutas de archivos, los nombres de canciones, artistas y crates y los correos se sustituyen por <ruta>, <pista>, «…» o <email>.'),
       preview);
     attach.addEventListener('change', () => { preview.hidden = !attach.checked; });
     const body = el('div', { class: 'form fb-form' },
       el('label', { class: 'frm', for: 'fb-kind' }, el('span', {}, 'Tipo'), kind),
       el('label', { class: 'frm', for: 'fb-text' }, el('span', {}, 'Mensaje'), text),
       el('label', { class: 'frm', for: 'fb-email' }, el('span', {}, 'Email (opcional)'), email),
+      el('label', { class: 'frm', for: 'fb-controller' }, el('span', {}, '¿Qué controladora usas? (opcional)'), ctl),
       box,
       el('p', { class: 'hint' }, `Lo recibe el equipo de NexuraIA (${FEEDBACK_EMAIL}). Más información en Ajustes → Acerca de → Privacidad.`));
 
@@ -104,7 +110,7 @@ export class Feedback {
     if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(mail)) toast('El email no parece válido: se envía sin él.', 'warn', 4000);
     toast('Enviando…', 'info', 2000);
     let r;
-    try { r = await platform.report.send({ kind: kind.value, text: msg, email: mail, attach: attach.checked, ...ctx, known }); }
+    try { r = await platform.report.send({ kind: kind.value, text: msg, email: mail, userController: ctl.value.trim().slice(0, 80), attach: attach.checked, ...ctx, known }); }
     catch (e) { r = { ok: false, via: 'error', error: e.message }; }
     if (r && r.ok) { toast('¡Gracias! Tu mensaje ha llegado a NexuraIA.', 'ok', 5000); return r; }
     const info = el('div', { class: 'form fb-form' },
