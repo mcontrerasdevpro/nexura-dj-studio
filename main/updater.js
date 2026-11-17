@@ -1,11 +1,18 @@
 // Actualizaciones automáticas (electron-updater, GitHub Releases de mcontrerasdevpro/nexura-dj-studio;
 // la configuración va en «build.publish» de package.json). Se comprueba en segundo plano al arrancar y
 // cada 6 h; nunca se descarga ni se reinicia sin que el usuario lo pida. Sin red o sin releases no se
-// muestra nada. Las versiones -rc/-beta solo se ofrecen con «Recibir versiones de prueba».
+// muestra nada. Con una versión estable instalada, las -rc/-beta solo se ofrecen con «Recibir versiones de
+// prueba»; con una versión de prueba instalada se ofrecen siempre (si no, electron-updater solo mira la release
+// «latest», que no existe mientras todas las publicadas son -rc, y da «No published versions on GitHub»).
 // El objeto autoUpdater se inyecta para poder probar la lógica en Node (tools/test-actualizaciones.mjs).
 'use strict';
 
 const EVERY = 6 * 60 * 60 * 1000;
+
+// ¿Es una versión de prueba? (1.0.0-rc.7, 2.0.0-beta.1, 1.1.0-alpha…)
+const isPrerelease = (v) => /-(rc|beta|alpha)\b/i.test(String(v || ''));
+// Canal efectivo: con una versión de prueba instalada siempre se reciben versiones de prueba
+const allowPrereleaseFor = (version, wanted) => isPrerelease(version) || !!wanted;
 
 // Novedades de la release (GitHub da HTML o, con varias versiones, [{version, note}]) → hasta 3 líneas de texto
 // plano de ≤ 140 caracteres para la ventana de aviso; sin notas, [].
@@ -20,7 +27,7 @@ function notesText(rel, max = 3) {
     .slice(0, max).map(l => l.length > 140 ? l.slice(0, 139).trimEnd() + '…' : l);
 }
 
-function createUpdater({ autoUpdater, send = () => {}, log = () => {}, beforeInstall = async () => {}, enabled = true, setTimer = setTimeout, setRepeat = setInterval }) {
+function createUpdater({ autoUpdater, version = '', send = () => {}, log = () => {}, beforeInstall = async () => {}, enabled = true, setTimer = setTimeout, setRepeat = setInterval }) {
   const st = { state: enabled ? 'idle' : 'disabled', version: '', percent: 0, notes: [], manual: false, auto: true, prerelease: false };
   let started = false, repeat = null;
   const emit = () => send({ state: st.state, version: st.version, percent: st.percent, notes: st.notes });
@@ -50,7 +57,7 @@ function createUpdater({ autoUpdater, send = () => {}, log = () => {}, beforeIns
 
   function applyChannel() {
     if (!autoUpdater) return;
-    autoUpdater.allowPrerelease = !!st.prerelease;
+    autoUpdater.allowPrerelease = allowPrereleaseFor(version, st.prerelease);
     autoUpdater.allowDowngrade = false; // allowPrerelease = true lo activa; nunca bajar de versión
   }
 
@@ -68,7 +75,7 @@ function createUpdater({ autoUpdater, send = () => {}, log = () => {}, beforeIns
 
   // La interfaz manda los ajustes al arrancar y cada vez que cambian
   function configure({ auto = true, prerelease = false } = {}) {
-    const chan = st.prerelease !== !!prerelease;
+    const chan = allowPrereleaseFor(version, st.prerelease) !== allowPrereleaseFor(version, prerelease);
     st.auto = auto !== false; st.prerelease = !!prerelease;
     if (!enabled) return;
     if (!started) {
@@ -96,4 +103,4 @@ function createUpdater({ autoUpdater, send = () => {}, log = () => {}, beforeIns
   return { check, configure, download, install, status: () => ({ ...st }), stop: () => repeat && clearInterval(repeat) };
 }
 
-module.exports = { createUpdater, notesText, EVERY };
+module.exports = { createUpdater, notesText, isPrerelease, allowPrereleaseFor, EVERY };

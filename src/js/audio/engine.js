@@ -3,7 +3,9 @@
 // dos dispositivos distintos, medidores y grabación.
 import { Emitter, clamp, dbToGain } from '../util.js';
 
-export const XF_CURVES = { smooth: 'Suave', long: 'Larga', blend: 'Rápida', sharp: 'Corte' };
+// Lo que se espera a que el dispositivo master quede elegido antes de montar la salida con el actual (setOutputs)
+export const SINK_WAIT_MS = 1500;
+export const XF_CURVES ={ smooth: 'Suave', long: 'Larga', blend: 'Rápida', sharp: 'Corte' };
 
 // Knob de EQ 0..1 → dB (0.5 = 0 dB, 0 = kill, 1 = +6 dB)
 export function eqKnobToDb(v) {
@@ -293,8 +295,26 @@ export class AudioEngine extends Emitter {
   // mode: 'auto' | '4ch' | 'separate' | 'stereo' | 'external'
   // external = mesa de mezclas externa: cada deck sale por su propio par de canales
   // (deck 1 → 1/2, deck 2 → 3/4) o por dos dispositivos; el mezclador interno queda en neutro.
-  async setOutputs({ mode = 'auto', masterDevice = '', cueDevice = '' } = {}) {
+  // Elegir el dispositivo del AudioContext (setSinkId) puede tardar varios segundos con algunos controladores
+  // (un tester: ~7 s al arrancar). Si ya es el pedido no se toca; si tarda más de SINK_WAIT_MS se monta la salida
+  // con el dispositivo actual y, cuando termina, se avisa con «sinkchange» para volver a montarla (sink: false =
+  // no volver a pedir el dispositivo). Los <audio> del cue y del deck 2 cambian de dispositivo sin esperar: suenan
+  // en cuanto está elegido (así nunca sale el cue por el master).
+  async setOutputs({ mode = 'auto', masterDevice = '', cueDevice = '', sink = true } = {}) {
     const ctx = this.ctx;
+    const gen = this.outGen = (this.outGen || 0) + 1;
+    if (ctx.setSinkId && sink) {
+      const want = masterDevice || '';
+      if (!(typeof ctx.sinkId === 'string' && ctx.sinkId === want)) {
+        const t0 = performance.now();
+        const done = ctx.setSinkId(want).then(() => true, (e) => { console.warn('setSinkId', e); return true; });
+        const inTime = await Promise.race([done, new Promise(r => setTimeout(() => r(false), SINK_WAIT_MS))]);
+        if (!inTime) {
+          console.warn(`setSinkId: el dispositivo de salida tarda más de ${SINK_WAIT_MS / 1000} s; se sigue con el actual`);
+          done.then(() => { if (this.outGen === gen) this.emit('sinkchange', Math.round(performance.now() - t0)); });
+        }
+      }
+    }
     try { this.masterOut.disconnect(ctx.destination); } catch (_) {}
     if (this.outMerger) { try { this.outMerger.disconnect(); } catch (_) {} try { this.mSplit.disconnect(); this.pSplit.disconnect(); } catch (_) {} this.outMerger = null; }
     try { this.phOut.disconnect(); } catch (_) {}
@@ -302,10 +322,15 @@ export class AudioEngine extends Emitter {
     this.extLinks = [];
     if (this.cueAudioEl) { this.cueAudioEl.pause(); this.cueAudioEl.srcObject = null; this.cueAudioEl = null; }
     if (this.deck2AudioEl) { this.deck2AudioEl.pause(); this.deck2AudioEl.srcObject = null; this.deck2AudioEl = null; }
+    // <audio> por un segundo dispositivo: suena cuando el dispositivo está elegido (o, si falla, por el predeterminado)
+    const sideOut = (stream, device, what) => {
+      const a = new Audio();
+      a.srcObject = stream;
+      const play = () => { if (a.srcObject) a.play().catch(() => {}); };
+      (a.setSinkId ? a.setSinkId(device) : Promise.reject(new Error('setSinkId no disponible'))).then(play, (e) => { console.warn(what, e); play(); });
+      return a;
+    };
 
-    if (ctx.setSinkId) {
-      try { await ctx.setSinkId(masterDevice || ''); } catch (e) { console.warn('setSinkId', e); }
-    }
     const max = ctx.destination.maxChannelCount;
     let eff = mode;
     if (mode === 'auto') eff = max >= 4 ? '4ch' : (cueDevice ? 'separate' : 'stereo');
@@ -350,11 +375,7 @@ export class AudioEngine extends Emitter {
           sideA.forEach(c => link(c.postFx, ctx.destination)); link(this.samplerBus, ctx.destination);
           const msd = ctx.createMediaStreamDestination();
           sideB.forEach(c => link(c.postFx, msd));
-          const a = new Audio();
-          a.srcObject = msd.stream;
-          try { await a.setSinkId(cueDevice); } catch (e) { console.warn('deck 2 sink', e); }
-          a.play().catch(() => {});
-          this.deck2AudioEl = a;
+          this.deck2AudioEl = sideOut(msd.stream, cueDevice, 'deck 2 sink');
         } else {
           // Sin 4 canales ni segundo dispositivo: lado A mono por la izquierda y lado B mono por la derecha
           this.extVariant = 'mono';
@@ -387,11 +408,7 @@ export class AudioEngine extends Emitter {
       if (eff === 'separate' && cueDevice) {
         const msd = ctx.createMediaStreamDestination();
         this.phOut.connect(msd);
-        const a = new Audio();
-        a.srcObject = msd.stream;
-        try { await a.setSinkId(cueDevice); } catch (e) { console.warn('cue sink', e); }
-        a.play().catch(() => {});
-        this.cueAudioEl = a;
+        this.cueAudioEl = sideOut(msd.stream, cueDevice, 'cue sink');
       }
     }
     this.outputMode = eff;

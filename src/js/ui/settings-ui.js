@@ -111,6 +111,11 @@ export class SettingsUI {
     const updState = el('small', { id: 'set-upd-state' }, app.updatesUI?.available ? `Versión instalada: ${info.version}` : 'Solo en la app instalada con el instalador (no en la Microsoft Store, que actualiza ella misma, ni en modo navegador).');
     const checkNow = btn('Buscar ahora', { cls: 'small', onClick: () => app.updatesUI.checkNow((msg) => { updState.textContent = msg; }) });
     checkNow.id = 'set-upd-check';
+    // Con una versión de prueba instalada (-rc, -beta, -alpha) siempre se reciben versiones de prueba (main/updater.js)
+    const testVersion = /-(rc|beta|alpha)\b/i.test(String(info.version || ''));
+    const preT = this.toggle('prereleaseUpdates');
+    preT.id = 'set-prerelease';
+    if (testVersion) { preT.checked = true; preT.disabled = true; }
     const statsT = el('input', { type: 'checkbox', class: 'switch', id: 'set-stats' });
     statsT.checked = s.statsEnabled === true;
     statsT.addEventListener('change', () => { app.setSetting('statsEnabled', statsT.checked); if (statsT.checked) app.sendStatsSoon(); });
@@ -125,7 +130,9 @@ export class SettingsUI {
       this.row('Tema de color', themeSel, 'Grafito: gris oscuro neutro, el color solo marca lo importante (Deck 1 azul, Deck 2 rojo, selección ámbar). Carbón: aún más oscuro. Azul noche: la paleta azul de las versiones anteriores. Se aplica al momento'),
       el('h3', {}, 'Actualizaciones'),
       this.row('Buscar actualizaciones automáticamente', this.toggle('autoUpdate'), 'Al abrir la app y cada 6 horas, en segundo plano. Si hay una versión nueva verás un aviso abajo; tú decides cuándo descargarla. Nunca se reinicia con música sonando: en ese caso se instala al cerrar'),
-      this.row('Recibir versiones de prueba', this.toggle('prereleaseUpdates'), 'Ofrece también versiones -rc y -beta (pueden tener errores)'),
+      testVersion
+        ? this.row('Recibir versiones de prueba', preT, `Siempre activado: tienes instalada una versión de prueba (${info.version}), así que recibes la siguiente versión de prueba y, cuando salga, la estable`)
+        : this.row('Recibir versiones de prueba', preT, 'Ofrece también versiones -rc y -beta (pueden tener errores)'),
       this.row(checkNow, updState),
       el('h3', {}, 'Estadísticas anónimas'),
       this.row('Enviar estadísticas anónimas de uso', statsT, 'Como mucho una vez al día y solo esto: ' + STATS_FIELDS_TEXT + ' Nunca tu música, tus archivos ni datos personales'),
@@ -435,7 +442,9 @@ export class SettingsUI {
     const models = el('ul', { class: 'ctl-models' },
       el('li', {}, el('b', {}, 'Denon DJ MC4000'), ' — perfil nativo (LEDs, vúmetros y jog calibrado)'),
       ...m.catalog.models.map(pr => el('li', {}, el('b', {}, pr.name), ` — ${pr.mappings.length} controles${feats(pr) ? ` · ${feats(pr)}` : ''} · `,
-        el('a', { href: '#', class: 'link', onclick: (e) => { e.preventDefault(); app.platform.openExternal(pr.source); } }, 'documentación MIDI del fabricante'))));
+        pr.origin === 'comunidad'
+          ? el('span', { class: 'ctl-community', title: 'Lo configuró un usuario con el asistente y nos lo envió; no sale de la documentación del fabricante' }, 'perfil aportado por la comunidad')
+          : el('a', { href: '#', class: 'link', onclick: (e) => { e.preventDefault(); app.platform.openExternal(pr.source); } }, 'documentación MIDI del fabricante'))));
 
     p.append(...[
       el('h3', {}, 'Controladoras conectadas'), el('ul', { class: 'dev-list' }, ...devs),

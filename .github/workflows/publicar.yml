@@ -72,11 +72,34 @@ jobs:
         shell: bash
         run: node tools/notas-version.cjs "${{ steps.v.outputs.version }}" > notas-version.md && cat notas-version.md
 
+      # config.local.json no está en git: lleva la dirección del servicio de sugerencias (main.js → FEEDBACK_URL).
+      # Sin ella el instalador no puede enviar informes, así que si el secreto falta se para aquí.
+      # La URL no se imprime nunca (GitHub además oculta los secretos en el registro).
+      - name: Configurar el envío de sugerencias (config.local.json)
+        if: steps.v.outputs.nueva == 'true'
+        shell: bash
+        env:
+          NEXURA_FEEDBACK_WEBHOOK: ${{ secrets.NEXURA_FEEDBACK_WEBHOOK }}
+        run: |
+          if [ -z "$NEXURA_FEEDBACK_WEBHOOK" ]; then
+            echo "::error::Falta el secreto NEXURA_FEEDBACK_WEBHOOK (o está vacío): no se publica un instalador sin envío de sugerencias."
+            exit 1
+          fi
+          node -e "require('fs').writeFileSync('config.local.json', JSON.stringify({ feedbackWebhook: process.env.NEXURA_FEEDBACK_WEBHOOK }, null, 2))"
+          test -s config.local.json || { echo "::error::config.local.json no existe o está vacío"; exit 1; }
+          node tools/check-url-sugerencias.cjs --fuente
+
       - name: Generar y subir el instalador
         if: steps.v.outputs.nueva == 'true'
         run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # El instalador subido sigue en borrador hasta el paso siguiente: si el asar no tiene la URL, no se publica
+      - name: Comprobar la URL de sugerencias en el instalador
+        if: steps.v.outputs.nueva == 'true'
+        shell: bash
+        run: node tools/check-url-sugerencias.cjs --asar dist/win-unpacked/resources/app.asar
 
       - name: Publicar la versión
         if: steps.v.outputs.nueva == 'true'

@@ -3,7 +3,9 @@
 //   { id, name, manufacturer, models: [..], match: [regex], source: URL del manual, decks: 2|4,
 //     mappings: [{ key: 'n0:11', action: 'deck1.play', kind?: 'button'|'abs'|'rel', enc?, inv?, ticksPerRev? }],
 //     leds: [{ key, action, on?, off? }], vu: [{ key: 'c0:2', source: 'deck1'|'masterL'|'masterR', min?, max? }],
-//     generic?: true (familia sin controles: solo da nombre), missing: [lo no documentado] }
+//     generic?: true (familia sin controles: solo da nombre), missing: [lo no documentado],
+//     origin?: 'fabricante' (por defecto: source = URL de la documentación oficial) | 'comunidad' (aportado por
+//     un usuario con el asistente; source = «comunidad: …», sin nombre ni email del usuario) }
 // key = n (nota) / c (CC) / p (pitch bend) + canal 0-15 + ':' + número decimal (igual que midiKey en midi.js).
 const BUILTIN_INDEX = new URL('./profiles/index.json', import.meta.url);
 // Pasos del jog de la MC4000 por vuelta: escala de referencia del motor de scratch (deck.jogTurn)
@@ -12,6 +14,9 @@ export const KEY_RE = /^([ncp])(\d|1[0-5]):(\d{1,3})$/;
 export const VU_SOURCES = ['deck1', 'deck2', 'deck3', 'deck4', 'masterL', 'masterR', 'master'];
 const KINDS = ['button', 'abs', 'rel'];
 const ENCS = ['twos', 'offset', 'sign'];
+// Procedencia de un perfil incluido: documentación oficial del fabricante o aportado por la comunidad
+export const ORIGINS = ['fabricante', 'comunidad'];
+export const isCommunity = (p) => !!p && p.origin === 'comunidad';
 
 const validKey = (k) => { const m = KEY_RE.exec(k || ''); return !!m && +m[3] <= 127 && (m[1] !== 'p' || m[3] === '0'); };
 const byte = (v, d) => (Number.isInteger(v) && v >= 0 && v <= 127 ? v : d);
@@ -27,6 +32,9 @@ export function profileErrors(raw, actions = null) {
   if (typeof raw.name !== 'string' || !raw.name) err.push('sin nombre');
   if (!Array.isArray(raw.mappings)) err.push('sin mappings');
   for (const s of raw.match || []) { try { new RegExp(s, 'i'); } catch (_) { err.push(`patrón no válido: ${s}`); } }
+  if (raw.origin != null && !ORIGINS.includes(raw.origin)) err.push(`procedencia no válida: ${raw.origin}`);
+  if (isCommunity(raw) && !/^comunidad:/.test(raw.source || '')) err.push('perfil de la comunidad: «source» debe empezar por «comunidad:»');
+  if (isCommunity(raw) && /@/.test(JSON.stringify([raw['//'], raw.source, raw.sourceTitle, raw.name]))) err.push('perfil de la comunidad: no puede llevar el email del usuario');
   const seen = new Set();
   for (const m of raw.mappings || []) {
     const where = `${m && m.key} → ${m && m.action}`;
