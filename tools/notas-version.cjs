@@ -30,7 +30,8 @@ const out = [
   '---',
   '',
   prueba
-    ? 'Si tienes una versión anterior con «Recibir versiones de prueba» activado, se actualiza sola.'
+    // hasta la 1.0.0-rc.6, una versión de prueba solo se actualizaba sola con el ajuste activado (main/updater.js)
+    ? 'Si tienes una versión de prueba anterior con «Recibir versiones de prueba» activado, se actualiza sola. Si lo tienes desactivado y tu versión es la 1.0.0-rc.6 o anterior, actívalo (Ajustes → General) o instala esta versión a mano una vez: desde la 1.0.0-rc.7, las versiones de prueba se actualizan solas siempre.'
     : 'Si tienes una versión anterior, se actualiza sola.',
   'Windows puede mostrar «Windows protegió su PC» porque la app aún no está firmada: pulsa «Más información» y después «Ejecutar de todas formas».',
   '',

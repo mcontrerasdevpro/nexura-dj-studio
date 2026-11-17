@@ -70,7 +70,13 @@ const raw = Object.fromEntries(index.map(f => [f, JSON.parse(fs.readFileSync(pat
 for (const [f, p] of Object.entries(raw)) {
   const errs = profileErrors(p, app.actions);
   ok(!errs.length, `${f}: formato y acciones correctos`, errs);
-  if (!p.generic) {
+  if (!p.generic && p.origin === 'comunidad') {
+    // aportado por un usuario con el asistente: lo dice en «//» y en source, sin nombre ni email
+    ok(/^comunidad:/.test(p.source || '') && /asistente/.test(p.source) && /aportado por un usuario/i.test(p['//'] || '') && /no sale de documentación del fabricante/i.test(p['//']), `${f}: perfil de la comunidad, lo indica en «//» y en source`, p.source);
+    ok(!/@|user-|fran/i.test(JSON.stringify([p['//'], p.source, p.sourceTitle, p.id, p.name])), `${f}: sin datos del usuario que lo aportó`);
+    ok(!/mixxx|serato|rekordbox|traktor|virtualdj/i.test(p.source), `${f}: la fuente no es de Mixxx ni de un programa comercial`, p.source);
+    ok(Array.isArray(p.models) && p.models.length && Array.isArray(p.missing), `${f}: lista sus modelos y lo que falta`);
+  } else if (!p.generic) {
     ok(/^https:\/\//.test(p.source || '') && typeof p['//'] === 'string' && /oficial/.test(p['//']), `${f}: cita la documentación oficial del fabricante`, p.source);
     ok(!/mixxx|serato|rekordbox|traktor|virtualdj/i.test(p.source), `${f}: la fuente no es de Mixxx ni de un programa comercial`, p.source);
     ok(Array.isArray(p.models) && p.models.length && Array.isArray(p.missing), `${f}: lista sus modelos y lo no documentado`);
@@ -191,11 +197,14 @@ for (const p of models) {
   const list = midi.buildLedList(dev.ds);
   ok(list.length === p.leds.length, `${p.id}: ${p.leds.length} LEDs en la lista`, list.length);
   ok(list.every(l => validOut([l.st, l.d1, l.on]) && validOut([l.st, l.d1, l.off]) && l.on !== l.off), `${p.id}: LEDs con estado de nota/CC y valores encendido ≠ apagado (0-127)`, list.slice(0, 3));
-  for (const a of ['play', 'cue', 'sync']) {
-    const want = p.mappings.some(m => m.action === `deck1.${a}`);
-    if (want) ok(p.leds.some(l => l.action === `deck1.${a}`), `${p.id}: LED de ${a.toUpperCase()} del deck 1`);
-  }
-  if (p.mappings.some(m => /^deck1\.pad1$/.test(m.action))) ok(p.leds.some(l => l.action === 'deck1.pad1'), `${p.id}: LED de los pads`);
+  // los de la comunidad (asistente) no saben qué notas encienden los LEDs: no se inventan
+  if (p.origin !== 'comunidad') {
+    for (const a of ['play', 'cue', 'sync']) {
+      const want = p.mappings.some(m => m.action === `deck1.${a}`);
+      if (want) ok(p.leds.some(l => l.action === `deck1.${a}`), `${p.id}: LED de ${a.toUpperCase()} del deck 1`);
+    }
+    if (p.mappings.some(m => /^deck1\.pad1$/.test(m.action))) ok(p.leds.some(l => l.action === 'deck1.pad1'), `${p.id}: LED de los pads`);
+  } else ok(!p.leds.length && p.missing.some(x => /LED/.test(x)), `${p.id}: sin LEDs inventados (anotado en missing)`);
   // un frame con niveles: los LEDs se envían y los vúmetros reflejan el nivel
   app.lastMeters = { ch: [1, 0.05, 1, 0.05], L: 1, R: 0.0005 };
   app.decks[0].playing = true;
@@ -221,6 +230,34 @@ for (const p of models) {
   midi.devState.delete(dev.input.id);
 }
 ok(MidiManager.vuValue(0) === 0 && MidiManager.vuValue(1) > 0x70 && MidiManager.vuValue(1.5) === 0x7F && MidiManager.vuValue(0.5, 0, 100) <= 100, 'escala de vúmetro: silencio 0, 0 dBFS casi al máximo y sin pasarse del rango');
+
+// ---------------------------------------------------------------- THE NEXT BEAT (perfil de la comunidad)
+section('THE NEXT BEAT (aportado por un usuario con el asistente)');
+{
+  const tnb = models.find(p => p.id === 'the-next-beat');
+  ok(!!tnb && tnb.origin === 'comunidad', 'perfil incluido the-next-beat con procedencia «comunidad»');
+  for (const name of ['THE NEXT BEAT', 'THE NEXT BEAT In', 'The Next Beat', 'MIDIIN2 (THE NEXT BEAT)', 'THE NEXT BEAT MIDI 1', 'TheNextBeat', 'THE-NEXT-BEAT']) {
+    const hits = models.filter(q => q.matchers.some(re => re.test(name))).map(q => q.id);
+    ok(hits.length === 1 && hits[0] === 'the-next-beat', `«${name}» → solo the-next-beat`, hits);
+  }
+  ok(!models.filter(q => q.id !== 'the-next-beat').some(q => q.matchers.some(re => re.test('THE NEXT BEAT'))), 'ningún otro perfil reconoce «THE NEXT BEAT»');
+  ok(tnb.mappings.length === 59 && new Set(tnb.mappings.map(m => m.key)).size === 59, 'conserva los 59 controles que configuró el usuario');
+  const dev = device(tnb);
+  const go = (bytes) => send(dev, bytes);
+  ok(go([0x90, 0, 0x7F]).some(x => x.who === 'deck1' && x.fn === 'togglePlay') && go([0x91, 0, 0x7F]).some(x => x.who === 'deck2' && x.fn === 'togglePlay'), 'PLAY: nota 0 en el canal 1 → deck 1 y en el canal 2 → deck 2');
+  ok(go([0x90, 1, 0x7F]).some(x => x.who === 'deck1' && x.fn === 'cueDown') && go([0x80, 1, 0]).some(x => x.who === 'deck1' && x.fn === 'cueUp'), 'CUE 1: pulsar → cueDown; soltar (Note Off) → cueUp');
+  ok(go([0x91, 1, 0x7F]).some(x => x.who === 'deck2' && x.fn === 'cueDown'), 'CUE 2 → cueDown del deck 2');
+  let j = go([0xB0, 6, 0x01]).find(x => x.who === 'deck1' && x.fn === 'jogTurn');
+  ok(j && Math.abs(j.args[0] - 3.288) < 1e-9 && j.args[1] === REF_TICKS_PER_REV, 'jog 1 (CC 6, complemento a dos) un paso adelante → jogTurn(+3,288)', j);
+  j = go([0xB0, 6, 0x7F]).find(x => x.fn === 'jogTurn');
+  ok(j && Math.abs(j.args[0] + 3.288) < 1e-9, 'jog 1 un paso atrás → jogTurn(−3,288)', j);
+  j = go([0xB1, 6, 0x02]).find(x => x.who === 'deck2' && x.fn === 'jogTurn');
+  ok(j && Math.abs(j.args[0] - 2 * 3.3425) < 1e-9, 'jog 2 (calibrado por el usuario) dos pasos → jogTurn(+6,685)', j);
+  ok(go([0x90, 6, 0x7F]).some(x => x.who === 'deck1' && x.fn === 'jogTouch' && x.args[0] === true), 'tocar el plato 1 → jogTouch(true)');
+  const p1 = go([0xB0, 10, 127]).find(x => x.who === 'deck1' && x.fn === 'setPitchFader');
+  ok(p1 && p1.args[0] > 0.99, 'pitch 1 invertido, como lo dejó el usuario', p1);
+  midi.devState.delete(dev.input.id);
+}
 
 // ---------------------------------------------------------------- tipo de perfil por dispositivo
 section('Tipo de perfil');

@@ -175,7 +175,12 @@ class App extends Emitter {
     this.decks.forEach(d => d.on('track', () => this.stems.syncBackground()));
     this.updateDeckMode();
     setInterval(() => { if (this.pendingDeckMode) this.updateDeckMode(); }, 1000);
-    // salidas de audio: tampoco bloquean (elegir un dispositivo puede tardar si el controlador no responde)
+    // salidas de audio: tampoco bloquean (elegir un dispositivo puede tardar si el controlador no responde).
+    // Si el dispositivo master tarda más de SINK_WAIT_MS, la salida se monta con el actual y se rehace al terminar
+    this.engine.on('sinkchange', (ms) => {
+      this.feedback.log('INFO', 'audio', `Dispositivo de salida elegido tras ${(ms / 1000).toFixed(1)} s: se vuelve a montar la salida`);
+      this.applyOutputs(true, false).catch(e => console.warn('salidas', e));
+    });
     this.outputsReady = this.watchStep('outputs', this.applyOutputs(true)).then(() => { this.startup.outputs = 'ok'; }, (e) => {
       this.startup.outputs = 'error';
       this.feedback.log('ERROR', 'audio', 'No se pudieron aplicar las salidas de audio: ' + ((e && e.message) || e));
@@ -331,10 +336,11 @@ class App extends Emitter {
     this.emit('settings', k, v);
   }
 
-  async applyOutputs(silent = false) {
+  // sink: false = no volver a pedir el dispositivo master (ya lo ha elegido tarde: «sinkchange» del motor)
+  async applyOutputs(silent = false, sink = true) {
     const s = this.settings;
     this.engine.extDecks = this.deckCount;
-    const mode = await this.engine.setOutputs({ mode: s.outputMode, masterDevice: s.masterDevice, cueDevice: s.cueDevice });
+    const mode = await this.engine.setOutputs({ mode: s.outputMode, masterDevice: s.masterDevice, cueDevice: s.cueDevice, sink });
     const f = this.deckCount === 4;
     const ext = {
       '8ch': 'Mesa externa: Deck 1 → 1/2 · Deck 2 → 3/4 · Deck 3 → 5/6 · Deck 4 → 7/8',

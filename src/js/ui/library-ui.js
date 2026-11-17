@@ -704,8 +704,8 @@ export class LibraryUI {
     if (empty) {
       this.empty.innerHTML = '';
       if (this.viewId === 'all' && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Tu biblioteca está vacía'), el('p', {}, 'Arrastra aquí archivos o carpetas de música, o usa «+ Añadir música» en la barra lateral.')));
-      else if (this.viewId === 'ai:next' && !this.app.ai.refDeck()) this.empty.append(el('div', {}, el('h3', {}, '✨ Sugerencias de la IA'), el('p', {}, 'Carga una pista en un deck y aquí verás las que mejor mezclan con ella: tonalidad compatible, BPM cercano y energía.')));
-      else if (this.viewId === 'ai:next') this.empty.append(el('p', {}, 'No hay pistas analizadas que encajen. Analiza tu biblioteca con «Analizar».'));
+      else if (this.viewId === 'ai:next' && !this.app.ai.refDeck()) this.empty.append(el('div', {}, el('h3', {}, '✨ Sugerencias de la IA'), el('p', {}, 'Carga una pista en un deck y aquí verás las que mejor mezclan con ella: BPM dentro del rango de mezcla (±6 %), mismo género o compatible, tonalidad y energía.')));
+      else if (this.viewId === 'ai:next') this.empty.append(el('p', {}, 'No hay pistas analizadas que encajen (BPM a ±6 % y género compatible). Analiza tu biblioteca con «Analizar».'));
       else if (this.viewId === 'files' && !this.search) {
         const d = this.files.dir;
         this.empty.append(el('div', {}, el('h3', {}, d ? 'No hay archivos de audio en esta carpeta' : 'Archivos'),
@@ -994,7 +994,7 @@ export class LibraryUI {
         const url = t.source === 'youtube' ? t.thumb : this.art.get(t.id);
         return el('span', { class: 'c-art' }, url && url !== 'pending' ? el('img', { src: url, alt: '', loading: 'lazy' }) : el('i', {}, '♪'));
       }
-      case 'title': return el('span', { class: 'c-title', title: ctx.ai ? ctx.ai.reasons.join(' · ') : '' }, t.title || '—', t.energy ? el('small', { class: 'nrg', title: 'Energía estimada por la IA (1-10)' }, '⚡' + t.energy) : null, t.stems ? el('small', { class: 'stm', title: 'Stems separados (voz, batería, bajo, melodía)' }, 'STEMS') : null);
+      case 'title': return el('span', { class: 'c-title', title: ctx.ai ? ctx.ai.reasons.join(' · ') : '' }, t.title || '—', ctx.ai && ctx.ai.why ? el('small', { class: 'ai-why' }, ctx.ai.why) : null, t.energy ? el('small', { class: 'nrg', title: 'Energía estimada por la IA (1-10)' }, '⚡' + t.energy) : null, t.stems ? el('small', { class: 'stm', title: 'Stems separados (voz, batería, bajo, melodía)' }, 'STEMS') : null);
       case 'artist': return el('span', { class: 'c-artist' }, t.artist || '');
       case 'bpm': return el('span', { class: 'num c-bpm' }, t.bpm ? (Math.round(t.bpm * 10) / 10).toString() : '');
       case 'camelot': { const ok = ctx.akey && camelotCompatible(ctx.akey, t.camelot); return el('span', { class: 'num key' + (ok ? ' compat' : ''), style: { color: keyColor(t.camelot) } }, (ok ? '◉ ' : '') + (t.camelot || t.key || '')); }

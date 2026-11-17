@@ -1,5 +1,27 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.7 · noviembre de 2026
+
+### Las sugerencias vuelven a llegar
+- Arreglado: **«Enviar informe o sugerencia»** fallaba siempre con «No se ha podido enviar directamente». La versión publicada se había quedado sin la dirección del servicio de sugerencias. Ahora tus mensajes vuelven a llegar al momento y verás **«Enviado»**.
+- Si alguna vez no se puede enviar, la app te dice el motivo de verdad (sin conexión, el servicio no responde…) y te abre el correo con el informe listo para adjuntar.
+
+### Actualizaciones automáticas en las versiones de prueba
+- Arreglado: si tenías instalada una versión de prueba (rc), la app no veía las versiones nuevas y decía que no había ninguna publicada: había que bajarlas a mano de GitHub. Ahora **te avisa de la siguiente versión de prueba** como de cualquier actualización.
+- En **Ajustes → General**, **«Recibir versiones de prueba»** sale activado y fijo mientras tengas una versión de prueba, con una nota que lo explica. Si no hay nada nuevo, **«Buscar ahora»** te dice **«Tienes la última versión»**.
+
+### Arranque más rápido
+- La app ya no se queda esperando a que Windows elija la tarjeta de sonido: si tarda, empieza con la salida que ya tiene y cambia a la tuya en cuanto está lista, sin cortar nada. La salida de auriculares (cue) tampoco hace esperar al arranque.
+
+### Sugerencias de IA por género y BPM
+- **«Siguiente pista (IA)»** ya no te propone un tema de pop cuando estás pinchando house. Ahora manda el **género** (mismo género o de su familia: house, deep house y tech house; techno y tech house; pop y dance pop…) y el **BPM**: solo salen pistas que puedes mezclar de verdad, a **±6 %** de tu tempo (o al doble o la mitad).
+- La **tonalidad** y la **energía** siguen contando, pero detrás del género y del BPM. Las pistas sin analizar no se sugieren o van al final.
+- Junto a cada sugerencia ves **por qué** se sugiere, por ejemplo **«mismo género · 126 BPM · 8A→9A»**.
+- Va rápido con bibliotecas grandes (probado con 28.000 pistas): sugerir no frena la app.
+
+### Perfil para la THE NEXT BEAT
+- La controladora **THE NEXT BEAT** se reconoce y se configura sola al conectarla: play, cue, sync, platos, pitch, faders, ecualizador, filtros, pads, loops, navegador y crossfader. Es un **perfil aportado por la comunidad**: lo configuró un usuario con el asistente y nos lo envió. ¡Gracias!
+
 ## 1.0.0-rc.6 · noviembre de 2026
 
 ### Vista Biblioteca: más pistas a la vista

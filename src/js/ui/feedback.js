@@ -112,9 +112,15 @@ export class Feedback {
     let r;
     try { r = await platform.report.send({ kind: kind.value, text: msg, email: mail, userController: ctl.value.trim().slice(0, 80), attach: attach.checked, ...ctx, known }); }
     catch (e) { r = { ok: false, via: 'error', error: e.message }; }
-    if (r && r.ok) { toast('¡Gracias! Tu mensaje ha llegado a NexuraIA.', 'ok', 5000); return r; }
+    if (r && r.ok) { toast('Enviado. ¡Gracias! Tu mensaje ha llegado a NexuraIA.', 'ok', 5000); return r; }
+    // r.reason: 'no-url' (esta versión no tiene servicio de informes) o 'http' / 'timeout' / 'network' (el motivo exacto, en el registro técnico)
+    const why = r && r.reason === 'no-url'
+      ? 'Esta versión de la app no puede enviar informes directamente. Envíanoslo por correo y adjunta el archivo del informe, por favor.'
+      : r && r.reason === 'http' ? 'No se ha podido enviar directamente: el servicio de informes no ha aceptado el envío.'
+        : r && r.reason === 'timeout' ? 'No se ha podido enviar directamente: el servicio de informes no ha respondido a tiempo.'
+          : 'No se ha podido enviar directamente (sin conexión o servicio no disponible).';
     const info = el('div', { class: 'form fb-form' },
-      el('p', {}, 'No se ha podido enviar directamente (sin conexión o servicio no disponible).'),
+      el('p', { id: 'fb-why' }, why),
       el('p', {}, `Se ha abierto tu programa de correo con el mensaje para ${FEEDBACK_EMAIL}. Si no se abre, escríbenos a esa dirección.`),
       r && r.file ? el('p', { class: 'hint' }, 'El informe completo, con el registro técnico, está guardado en este archivo. Adjúntalo al correo, por favor:') : null,
       r && r.file ? el('pre', { class: 'fb-preview fb-path' }, r.file) : null);

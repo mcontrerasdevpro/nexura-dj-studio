@@ -127,7 +127,7 @@ function setupUpdater() {
   const enabled = (app.isPackaged || test) && !process.windowsStore && process.env.NEXURA_NO_UPDATES !== '1';
   if (enabled) { try { ({ autoUpdater } = require('electron-updater')); if (test) autoUpdater.forceDevUpdateConfig = true; } catch (e) { log('WARN', 'actualizaciones', 'electron-updater no disponible: ' + e.message); } }
   updater = createUpdater({
-    autoUpdater, enabled: enabled && !!autoUpdater,
+    autoUpdater, enabled: enabled && !!autoUpdater, version: app.getVersion(),
     send: (ev) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:event', ev); },
     log: (level, msg) => log(level, 'actualizaciones', msg),
     beforeInstall: async (reason) => { const r = backupNow(reason); if (r.name) log('INFO', 'copias', 'Copia antes de actualizar: ' + r.name); }
@@ -1335,26 +1335,38 @@ function registerIpc() {
     log: logger ? logger.tail(report.LOG_LINES) : [], known: info.known, user: os.userInfo().username, home: os.homedir(),
     perf: { system: await systemPerf(), app: info.perf }
   });
+  // POST al servicio de informes con 15 s como mucho. Si falla, el motivo va al registro técnico (sin la URL).
+  const postFeedback = async (body) => {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await fetch(FEEDBACK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
+      if (r.ok) return { ok: true };
+      log('WARN', 'informe', `El servicio de informes respondió HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`);
+      return { ok: false, reason: 'http', status: r.status };
+    } catch (e) {
+      const timeout = ctl.signal.aborted;
+      const why = timeout ? 'tiempo de espera agotado (15 s)' : String((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e).replace(/https?:\/\/\S+/g, '<url>');
+      log('WARN', 'informe', 'No se ha podido contactar con el servicio de informes: ' + why);
+      return { ok: false, reason: timeout ? 'timeout' : 'network' };
+    } finally { clearTimeout(t); }
+  };
   ipcMain.handle('report:preview', async (_e, info) => { const t = await techFor(info || {}); return { ...t, perfLines: report.perfText(t.perf) }; });
   ipcMain.handle('report:send', async (_e, info) => {
     info = info || {};
     // sugerencias que quedaron en cola en la beta: se envían tal cual (sin alternativa)
     if (info.legacy) {
-      if (!FEEDBACK_URL) return { ok: false };
-      const r = await fetch(FEEDBACK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ app: APP_NAME, ...info.legacy }) }).catch(() => null);
-      return { ok: !!(r && r.ok) };
+      if (!FEEDBACK_URL) return { ok: false, reason: 'no-url' };
+      return postFeedback({ app: APP_NAME, ...info.legacy });
     }
     const tech = info.attach ? await techFor(info) : null;
     const payload = report.buildPayload({ kind: info.kind, text: info.text, email: info.email, userController: info.userController, attach: !!info.attach, tech, version: app.getVersion() });
+    // reason: 'no-url' (esta versión no tiene servicio de informes), 'http', 'timeout' o 'network'
+    let reason = 'no-url';
     if (FEEDBACK_URL) {
-      try {
-        const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
-        const r = await fetch(FEEDBACK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: ctl.signal });
-        clearTimeout(t);
-        if (r.ok) { log('INFO', 'informe', 'Informe enviado'); return { ok: true, via: 'web' }; }
-        log('WARN', 'informe', 'El servicio de informes respondió HTTP ' + r.status);
-      } catch (e) { log('WARN', 'informe', 'Sin conexión con el servicio de informes'); }
-    }
+      const res = await postFeedback(payload);
+      if (res.ok) { log('INFO', 'informe', 'Informe enviado'); return { ok: true, via: 'web' }; }
+      reason = res.reason;
+    } else log('WARN', 'informe', 'Esta versión no tiene dirección del servicio de informes (feedbackUrl y feedbackWebhook vacíos): se ofrece el correo');
     // alternativa: guardar el informe en un .txt y abrir el correo con el texto
     await fsp.mkdir(reportsDir(), { recursive: true });
     const file = path.join(reportsDir(), `informe-${backup.folderName(new Date())}.txt`);
@@ -1362,7 +1374,7 @@ function registerIpc() {
     await fsp.writeFile(file, '﻿' + txt);
     shell.openExternal(report.mailtoUrl({ kind: payload.type, text: payload.message, email: payload.email, file: tech ? file : '' })).catch(() => {});
     if (tech) shell.showItemInFolder(file);
-    return { ok: false, via: 'mail', file };
+    return { ok: false, via: 'mail', file, reason };
   });
 
   // ---- Contador anónimo de uso (main/stats.js): solo con statsUrl y permiso del usuario

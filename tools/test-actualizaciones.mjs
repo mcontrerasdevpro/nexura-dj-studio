@@ -3,7 +3,7 @@
 import { createRequire } from 'module';
 import { EventEmitter } from 'events';
 const require = createRequire(import.meta.url);
-const { createUpdater, notesText, EVERY } = require('../main/updater.js');
+const { createUpdater, notesText, isPrerelease, allowPrereleaseFor, EVERY } = require('../main/updater.js');
 
 let pass = 0, fail = 0;
 const ok = (c, msg) => { if (c) { pass++; console.log('  ✓', msg); } else { fail++; console.log('  ✗', msg); } };
@@ -98,6 +98,36 @@ await s.timers[0].fn();
 ok(s.au.lastPrerelease === false && s.au.allowDowngrade === false, 'por defecto solo versiones estables');
 s.up.configure({ auto: true, prerelease: true }); await tick();
 ok(s.au.calls.check === 2 && s.au.lastPrerelease === true && s.au.allowDowngrade === false, 'al activar «Recibir versiones de prueba» comprueba con -rc/-beta y sin bajar de versión');
+
+console.log('Versión de prueba instalada (todas las publicadas son -rc)');
+ok(isPrerelease('1.0.0-rc.7') && isPrerelease('2.0.0-beta.1') && isPrerelease('1.1.0-alpha') && !isPrerelease('1.0.0') && !isPrerelease(''), 'detecta -rc, -beta y -alpha');
+ok(allowPrereleaseFor('1.0.0-rc.6', false) === true && allowPrereleaseFor('1.0.0-rc.6', true) === true, 'con una rc: allowPrerelease siempre true, aunque el ajuste esté desactivado');
+ok(allowPrereleaseFor('1.0.0', false) === false && allowPrereleaseFor('1.0.0', true) === true, 'con una estable: se respeta el ajuste');
+const withVersion = (version, result) => {
+  const au = fake(result), timers = [], events = [];
+  const up = createUpdater({ autoUpdater: au, version, send: (e) => events.push(e), setTimer: (fn, ms) => { timers.push({ fn, ms }); return 0; }, setRepeat: () => 0 });
+  return { au, up, timers, events };
+};
+let r = withVersion('1.0.0-rc.6', 'none');
+r.up.configure({ auto: true, prerelease: false });
+await r.timers[0].fn();
+ok(r.au.lastPrerelease === true && r.au.allowDowngrade === false, 'rc.6 con el ajuste desactivado comprueba con allowPrerelease = true (y sin bajar de versión)');
+r.up.configure({ auto: true, prerelease: true }); await tick();
+ok(r.au.calls.check === 1, 'con una rc, cambiar el ajuste no cambia el canal: no repite la comprobación');
+// Simulación de GitHub: solo hay releases -rc; sin allowPrerelease electron-updater busca «latest» y no la encuentra
+const github = (u) => { if (!u.allowPrerelease) { u.emit('error', new Error('No published versions on GitHub')); return null; } return { version: '1.0.0-rc.7' }; };
+r = withVersion('1.0.0-rc.6', github);
+r.up.configure({ auto: true, prerelease: false });
+await r.timers[0].fn(); await tick();
+ok(r.events.at(-1)?.state === 'available' && r.events.at(-1).version === '1.0.0-rc.7', 'tester con rc.6 y el ajuste desactivado: le llega la rc.7');
+r = withVersion('1.0.0', github);
+r.up.configure({ auto: true, prerelease: false });
+await r.up.check(true); await tick();
+ok(r.au.lastPrerelease === false && r.events.at(-1).state === 'none', 'con una estable y el ajuste desactivado no se ofrecen rc; «No published versions» → «Tienes la última versión»');
+r = withVersion('1.0.0', github);
+r.up.configure({ auto: true, prerelease: true });
+await r.timers[0].fn(); await tick();
+ok(r.au.lastPrerelease === true && r.events.at(-1)?.state === 'available', 'con una estable y el ajuste activado sí se ofrecen');
 
 console.log('Desactivado (npm start, Microsoft Store)');
 const ev = [];
