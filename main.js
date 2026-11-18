@@ -1297,6 +1297,14 @@ function registerIpc() {
   ipcMain.handle('files:list', (_e, dir) => listFolder(dir));
   ipcMain.handle('files:meta', (_e, paths) => audioMeta(paths));
   ipcMain.handle('shell:showItem', (_e, p) => { shell.showItemInFolder(p); return true; });
+  // pantalla completa: on = true/false (null = cambiar); devuelve el estado pedido
+  ipcMain.handle('win:fullscreen', (_e, on) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const v = on == null ? !mainWindow.isFullScreen() : !!on;
+    mainWindow.setFullScreen(v);
+    return v;
+  });
+  ipcMain.handle('win:isFullscreen', () => !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()));
   // ---- Registro técnico: líneas de la interfaz (errores de JS, promesas, audio, MIDI…)
   ipcMain.on('log:write', (_e, lines) => {
     for (const l of (Array.isArray(lines) ? lines : []).slice(0, 50)) log(l && l.level, 'ui:' + String((l && l.source) || 'app').slice(0, 14), l && l.msg);
@@ -1491,6 +1499,10 @@ async function createWindow() {
     if (input.type === 'keyDown' && input.key === 'F12') mainWindow.webContents.toggleDevTools();
     if (input.type === 'keyDown' && input.key === 'F11') mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
+  // la interfaz sabe siempre si está en pantalla completa (botón ⛶), también si se cambia con F11
+  const fsSend = (v) => { if (!win.isDestroyed()) win.webContents.send('win:fullscreen', v); };
+  win.on('enter-full-screen', () => fsSend(true));
+  win.on('leave-full-screen', () => fsSend(false));
   closeFlushed = false;
   await mainWindow.loadURL(`http://localhost:${serverPort}/index.html`);
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });

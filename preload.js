@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('nexura', {
     list: (dir) => ipcRenderer.invoke('files:list', dir),
     meta: (paths) => ipcRenderer.invoke('files:meta', paths)
   },
+  // pantalla completa de la ventana (botón ⛶ de la barra superior; F11 lo cambia en el proceso principal y avisa)
+  win: {
+    fullscreen: (on) => ipcRenderer.invoke('win:fullscreen', on),
+    isFullscreen: () => ipcRenderer.invoke('win:isFullscreen'),
+    onFullscreen: (fn) => { const h = (_e, v) => fn(!!v); ipcRenderer.on('win:fullscreen', h); return () => ipcRenderer.removeListener('win:fullscreen', h); }
+  },
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   log: (lines) => ipcRenderer.send('log:write', lines),

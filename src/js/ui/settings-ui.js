@@ -670,8 +670,8 @@ export class SettingsUI {
       ['Navegar biblioteca', '↑ / ↓ / RePág / AvPág'], ['Barra lateral: recorrer / abrir / plegar y desplegar', '↑ ↓ / Intro / ← →'],
       ['Quitar de la crate / de Prepare (en «Todas las pistas»: eliminar de la biblioteca)', 'Supr'], ['Eliminar de la biblioteca al instante, sin preguntar (pistas seleccionadas, desde cualquier vista; los archivos no se borran)', 'Ctrl + Supr'], ['Eliminar la lista de YouTube con el foco en la barra lateral (en «YouTube · todos los vídeos»: quitar todos los vídeos; pide confirmación)', 'Supr'], ['Deshacer lo último quitado o eliminado', 'Ctrl + Z'], ['Cargar en deck 1 / 2', 'Mayús + ← / Mayús + →'], ['Cambiar panel', 'Tab / ← / →'],
       ['Zoom de la forma de onda: acercar / alejar', '+ / − (también la rueda del ratón sobre la onda)'],
-      ['Buscar', 'Ctrl + F'], ['Grabar', 'F9'], ['Pantalla completa', 'F11'], ['Herramientas de desarrollo', 'F12'],
-      ['Modo laptop', 'F8 (activar/desactivar)'], ['Vista Mezcla / Biblioteca', 'F10'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
+      ['Buscar', 'Ctrl + F'], ['Grabar', 'F9'], ['Herramientas de desarrollo', 'F12'],
+      ['Modo laptop', 'F8 (activar/desactivar)'], ['Vista Mezcla / Biblioteca', 'F10'], ['Pantalla completa', 'F11 o el botón ⛶ de arriba (salir: F11 o Esc)'], ['Automix IA', 'F7 (activar/desactivar)'], ['Autoplay del crate abierto', 'Mayús + F7 (empezar/parar)'], ['Autoplay: siguiente pista', 'Ctrl + →'], ['Split Cue', 'F6 (activar/desactivar)'],
       ['EQ kill', 'Clic derecho sobre HI/MID/LOW'], ['Ajuste fino de knobs/faders', 'Mayús + arrastrar'], ['Valor por defecto', 'Doble clic']
     ];
     p.append(el('h3', {}, 'Teclado y ratón'), el('table', { class: 'keys' }, ...rows.map(([a, b]) => el('tr', {}, el('td', {}, a), el('td', {}, el('kbd', {}, b))))));

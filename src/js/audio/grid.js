@@ -73,7 +73,7 @@ export function dominantBpm(grid, duration) {
 // Campos a guardar en la pista para una rejilla dada
 export function gridUpdate(grid, duration) {
   const g = normalize(grid);
-  if (g.length <= 1) return { grid: null, bpm: g[0] ? Math.round(g[0].bpm * 1000) / 1000 : undefined, firstBeat: g[0] ? g[0].t : 0, bpmLocked: true };
+  if (g.length <= 1) return { grid: null, bpm: g[0] ? Math.round(g[0].bpm * 10000) / 10000 : undefined, firstBeat: g[0] ? g[0].t : 0, bpmLocked: true };
   return { grid: g, bpm: dominantBpm(g, duration), firstBeat: g[0].t, bpmLocked: true };
 }
 

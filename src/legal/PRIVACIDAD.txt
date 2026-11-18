@@ -9,14 +9,14 @@ Resumen: Nexura DJ Studio funciona en tu ordenador. Tu música, tu biblioteca y 
 1. QUÉ SE GUARDA EN TU ORDENADOR (no se envía a nadie)
 Todo se guarda en la carpeta de datos de la app (%APPDATA%\Nexura DJ Studio):
 - Biblioteca: rutas de tus archivos de música, etiquetas, análisis (BPM, tonalidad, forma de onda), hot cues, loops, beatgrid, crates, Prepare e historial de sesiones.
-- Ajustes de la app y de tus controladoras MIDI, incluidas la carpeta de grabación que elijas y la última carpeta abierta en el panel «Archivos» (y, en «arranque.json», si la aceleración por GPU está desactivada).
+- Ajustes de la app y de tus controladoras MIDI, incluidas la carpeta de grabación que elijas y, del panel «Archivos», la última carpeta abierta, tus carpetas favoritas y las que tienes desplegadas en el árbol (y, en «arranque.json», si la aceleración por GPU está desactivada).
 - Copias de seguridad automáticas de la biblioteca (carpeta «copias», las 14 últimas).
 - Registro técnico de errores (carpeta «logs», 5 archivos de 1 MB como mucho).
 - Si conectas tu cuenta de Google o de Spotify: las claves de sesión, cifradas con el sistema de Windows.
 - Los stems que separes.
 Puedes borrar todo esto desinstalando la app y eliminando esa carpeta.
 Las grabaciones que hagas se guardan en Música › Nexura DJ Studio › Grabaciones o en la carpeta que elijas (y ahí se quedan aunque desinstales la app).
-El panel «Archivos» lee las carpetas y unidades de tu equipo solo para mostrarte su música: no copia, mueve ni borra nada, no envía nada fuera del equipo y sus rutas no aparecen en el registro técnico ni en el informe de errores.
+El panel «Archivos» lee las carpetas y unidades de tu equipo (y sus subcarpetas, al abrir una carpeta) solo para mostrarte su música: no copia, mueve ni borra nada, no envía nada fuera del equipo y sus rutas no aparecen en el registro técnico ni en el informe de errores.
 
 2. QUÉ SE ENVÍA, SOLO SI TÚ LO PERMITES O LO PIDES
 

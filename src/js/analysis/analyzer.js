@@ -1,5 +1,6 @@
 // Cliente del worker de análisis + caché de formas de onda
 import { gridUpdate } from '../audio/grid.js';
+import { GRID_VERSION } from './analysis-core.js';
 import { platform } from '../platform.js';
 import { keyToCamelot, keyLabel, KEY_NAMES, yieldToUI } from '../util.js';
 
@@ -78,7 +79,7 @@ export class Analyzer {
       energy: r.energy, sections: r.sections || [], energyCurve: r.energyCurve || null, energyV: r.energyV || null
     };
     if (!track.bpmLocked) {
-      meta.bpm = r.bpm; meta.firstBeat = r.firstBeat; meta.grid = null;
+      meta.bpm = r.bpm; meta.firstBeat = r.firstBeat; meta.grid = null; meta.gridV = GRID_VERSION;
       // tempo variable detectado: beatgrid con marcas (BPM dominante para la biblioteca)
       if (r.grid && r.grid.length > 1) Object.assign(meta, gridUpdate(r.grid, duration), { bpmLocked: false });
     }
@@ -99,6 +100,10 @@ export class Analyzer {
     return w;
   }
 }
+
+// Pista local analizada con un beatgrid automático de una versión anterior (BPM redondeado, fase tarde o en el
+// contratiempo, marcas falsas): se vuelve a analizar. Nunca si el BPM o el grid los ha fijado el usuario.
+export const needsGrid = (t) => !!(t && t.source === 'local' && t.analyzed && !t.bpmLocked && (t.gridV || 1) < GRID_VERSION);
 
 // BPM fijado por el usuario: el análisis lo respeta (solo calcula lo demás con esa rejilla)
 const lockOpts = (track, opts) => (track.bpmLocked && track.bpm ? { ...opts, lockedBpm: track.bpm, lockedFirstBeat: track.firstBeat || 0 } : opts);

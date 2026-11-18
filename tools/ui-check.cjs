@@ -120,9 +120,25 @@ app.whenReady().then(async () => {
     // importar M3U en el navegador (por nombre de archivo entre las pistas añadidas)
     report.checks[tag].m3u = await js(win, `(async () => { const txt = '#EXTM3U\\n#EXTINF:200,Fisher - Losing It\\nMusica\\\\Fisher - Losing It.mp3\\nno-existe.mp3\\n'; const r = await nexuraApp.importPlaylists([{ path: 'Mi lista.m3u', name: 'Mi lista.m3u', data: new TextEncoder().encode(txt) }]); return { encontradas: r.found, faltan: r.missing, crate: r.crate && r.crate.name, vista: nexuraApp.libraryUI.viewId === 'crate:' + r.crate.id }; })()`);
     await shot(win, `${tag}-09-m3u-importada`);
+    // botón de pantalla completa (⛶) junto a los ajustes: en el navegador, requestFullscreen; el icono y el texto
+    // cambian al entrar y al salir (también si se sale con Esc o F11: evento fullscreenchange)
+    const fsState = `(() => { const b = document.querySelector('#top-right .fs-btn'); return b && { title: b.title, pressed: b.getAttribute('aria-pressed'), doc: !!document.fullscreenElement, next: b.nextElementSibling && b.nextElementSibling.title }; })()`;
+    const fs0 = await js(win, fsState);
+    await win.webContents.executeJavaScript(`document.querySelector('#top-right .fs-btn').click(); true`, true);
+    await wait(700);
+    const fs1 = await js(win, fsState);
+    await win.webContents.executeJavaScript(`document.exitFullscreen ? document.exitFullscreen().catch(() => {}) : 0; true`, true);
+    await wait(700);
+    const fs2 = await js(win, fsState);
+    const fsOk = !!fs0 && fs0.title === 'Pantalla completa (F11)' && fs0.pressed === 'false' && fs0.next === 'Ajustes' &&
+      fs1.doc && fs1.title === 'Salir de pantalla completa (F11 o Esc)' && fs1.pressed === 'true' && !fs2.doc && fs2.title === 'Pantalla completa (F11)';
+    report.checks[tag].pantallaCompleta = { ok: fsOk, antes: fs0, dentro: fs1, fuera: fs2 };
+    if (!fsOk) report.errors.push(`${tag} botón de pantalla completa: ${JSON.stringify({ fs0, fs1, fs2 })}`);
     win.destroy();
   }
   fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
-  app.quit();
+  const fsBad = Object.values(report.checks).filter(c => !(c.pantallaCompleta && c.pantallaCompleta.ok)).length;
+  console.log(fsBad ? `✗ Botón de pantalla completa (modo navegador): falla en ${fsBad} tamaño(s)` : '✓ Botón de pantalla completa (modo navegador): entra, cambia icono y texto, y sale');
+  app.exit(fsBad ? 1 : 0);
 });

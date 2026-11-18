@@ -275,6 +275,8 @@ export function detectTempo(full, low, fps, minBpm = 85, maxBpm = 175, offFull =
     per = slope; ph = mt - slope * mk;
   }
   let fb = 60 * fps / per;
+  // sin redondear, para el refinado con los golpes de bombo (refineBeatgrid)
+  const raw = { bpm: fb, phaseTime: ph / fps + poff };
   if (Math.abs(fb - Math.round(fb)) < 0.06) {
     // BPM entero: re-centra la fase con el periodo exacto
     const exact = 60 * fps / Math.round(fb);
@@ -283,10 +285,211 @@ export function detectTempo(full, low, fps, minBpm = 85, maxBpm = 175, offFull =
     fb = Math.round(fb);
   } else fb = Math.round(fb * 100) / 100;
   const phaseTime = ph / fps + poff;
-  // BPM variable: desviación local de los golpes respecto a la rejilla fija
-  let drift = null;
-  try { drift = trackDrift(penv, fps, 60 * fps / fb, ph, poff); } catch (e) { drift = null; }
-  return { bpm: fb, phaseTime, confidence: bestScore, phaseFrom: useLow ? 'low' : 'full', drift };
+  // BPM variable: desviación local de los golpes respecto a la rejilla fija (perezoso: solo se calcula si el
+  // refinado ve que una rejilla constante no encaja; es lo más lento del análisis)
+  let drift;
+  const getDrift = () => {
+    if (drift === undefined) { try { drift = trackDrift(penv, fps, 60 * fps / fb, ph, poff); } catch (e) { drift = null; } }
+    return drift;
+  };
+  return { bpm: fb, phaseTime, raw, confidence: bestScore, phaseFrom: useLow ? 'low' : 'full', get drift() { return getDrift(); } };
+}
+
+// ---------------------------------------------------------------------------
+// Refinado del beatgrid con los golpes de bombo de todo el tema (fran4). La rejilla de detectTempo sale de
+// envolventes de 10,7 ms con el cuerpo grave del bombo: el BPM se redondeaba (a 0,01 o, si estaba cerca, a un
+// entero: hasta 0,06 BPM de error, > 150 ms de deriva en 6 min), la fase caía 5-25 ms tarde o en el contratiempo,
+// y el seguidor de tempo variable metía marcas (hasta 48) en temas de tempo constante, con saltos de fase.
+// Aquí: envolvente de la banda del bombo (< 400 Hz, filtro de fase cero) a 1 kHz; en zonas de 16 beats, el
+// promedio alineado al reloj de beats deja solo el bombo (lo periódico y fuerte) y su ataque = la subida más
+// brusca en dB; la recta (robusta) de los ataques de todas las zonas da el periodo y la fase exactos.
+// Si la recta encaja (residuo p90 ≤ 8 ms), la rejilla es CONSTANTE: la música electrónica casi siempre lo es.
+// ---------------------------------------------------------------------------
+const KZ = 16;           // beats por zona
+// versión del beatgrid automático: las pistas analizadas antes (sin `gridV`) se vuelven a analizar al cargarlas
+// en un deck o con «Analizar» (si el BPM no lo ha fijado el usuario)
+export const GRID_VERSION = 2;
+export const GRID_CONST_TOL = 0.008;  // residuo p90 (s) por debajo del cual la rejilla es constante
+
+function lowpassZero(x, sr, fc) {
+  const y = lowpass(x, sr, fc);
+  y.reverse();
+  const z = lowpass(y, sr, fc);
+  return z.reverse();
+}
+// Amplitud (RMS) de la banda < 400 Hz cada milisegundo
+export function kickEnvelope(d, sr) {
+  const y = lowpassZero(lowpassZero(d, sr, 400), sr, 400);
+  const hop = sr / 1000, n = Math.floor(y.length / hop);
+  const a = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const i0 = Math.round(k * hop), i1 = Math.round((k + 1) * hop);
+    let s = 0; for (let i = i0; i < i1; i++) s += y[i] * y[i];
+    a[k] = Math.sqrt(s / Math.max(1, i1 - i0));
+  }
+  const sm = new Float32Array(n);
+  for (let k = 0; k < n; k++) sm[k] = (a[Math.max(0, k - 1)] + 2 * a[k] + a[Math.min(n - 1, k + 1)]) / 4;
+  return sm;
+}
+const wrapTo = (v, p) => { let x = v % p; if (x > p / 2) x -= p; if (x < -p / 2) x += p; return x; };
+// Ataque del bombo en la zona [b0, b0+nb) de un reloj de beats (clock(b) en s): s respecto al reloj (> 0 =
+// después) y lo que destaca el golpe (pico / media). null si la zona no tiene bombo claro.
+// Promedio de la envolvente alineada al reloj, suavizado con una ventana de Hann de 13 ms (simétrica: no
+// desplaza nada y quita el rizado de la onda grave, que con 1 ms oscila cada 8 ms en un bombo de 60 Hz); el
+// golpe es el pico más alto en ±½ beat y su ataque, el primer cruce del 50 % entre el suelo de los 150 ms
+// anteriores y ese pico (insesgado: con un suavizado simétrico un escalón cruza el 50 % justo donde está).
+const HANN13 = (() => { const w = []; let s = 0; for (let i = 0; i < 13; i++) { const v = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i + 1) / 14); w.push(v); s += v; } return w.map(v => v / s); })();
+export function kickZone(env, clock, b0, nb, per) {
+  const half = Math.round(per * 500), pre = half + 160, post = half + 20, n = pre + post;
+  const avg = new Float64Array(n);
+  let cnt = 0;
+  for (let b = b0; b < b0 + nb; b++) {
+    const k0 = Math.round(clock(b) * 1000) - pre;
+    if (k0 < 0 || k0 + n >= env.length) continue;
+    for (let i = 0; i < n; i++) avg[i] += env[k0 + i];
+    cnt++;
+  }
+  if (cnt < nb * 0.75) return null;
+  const S = new Float64Array(n);
+  for (let i = 6; i < n - 6; i++) { let s = 0; for (let j = 0; j < 13; j++) s += HANN13[j] * avg[i - 6 + j]; S[i] = s; }
+  // el golpe: el pico más alto en ±½ beat (si hay dos casi iguales, uno a cada lado, el más cercano al reloj)
+  let mx = 0, mean = 0;
+  for (let i = pre - half; i < pre + half; i++) { if (S[i] > mx) mx = S[i]; mean += S[i] / (2 * half); }
+  if (!(mx > 0) || mx / (mean || 1e-12) < 1.6) return null;
+  let p = -1;
+  for (let i = pre - half + 1; i < pre + half - 1; i++) {
+    if (S[i] < 0.92 * mx || S[i] < S[i - 1] || S[i] < S[i + 1]) continue;
+    if (p < 0 || Math.abs(i - pre) < Math.abs(p - pre)) p = i;
+  }
+  if (p < 0) return null;
+  let f = p;
+  for (let i = Math.max(6, p - 150); i < p; i++) if (S[i] < S[f]) f = i;
+  const mid = S[f] + 0.5 * (S[p] - S[f]);
+  let k = f;
+  while (k < p && S[k] < mid) k++;
+  const on = k > f ? k - 1 + (mid - S[k - 1]) / ((S[k] - S[k - 1]) || 1e-12) : k;
+  return { off: (on - pre) / 1000, prom: mx / mean };
+}
+
+// Recta robusta y = a + b·x de puntos {x, y} con y circular (periodo per). Arranque por consenso (la recta por
+// dos zonas, o la horizontal por una, con más zonas a ≤ 4 ms: si en algunas zonas manda otro golpe, no tuerce
+// la recta) y después mínimos cuadrados descartando las que se alejan > max(4 ms, 3·mediana del error).
+function robustLine(pts, per) {
+  if (pts.length < 4) return null;
+  const T = 0.004, n0 = pts.length;
+  let seed = null, sc = -1;
+  const score = (a, b) => { let c = 0, e = 0; for (const p of pts) { const r = Math.abs(wrapTo(p.y - (a + b * p.x), per)); if (r <= T) { c++; e += r; } } return c - e / T / (n0 + 1); };
+  const step = Math.max(1, Math.floor(n0 / 40));
+  for (let i = 0; i < n0; i += step) {
+    const s0 = score(pts[i].y, 0);
+    if (s0 > sc) { sc = s0; seed = { a: pts[i].y, b: 0 }; }
+    for (let j = i + 1; j < n0; j += step) {
+      const dx = pts[j].x - pts[i].x; if (!dx) continue;
+      const b = wrapTo(pts[j].y - pts[i].y, per) / dx, a = pts[i].y - b * pts[i].x;
+      if (Math.abs(b) > per * 0.003) continue; // > 0,3 % de error de tempo: imposible tras detectTempo
+      const s = score(a, b);
+      if (s > sc) { sc = s; seed = { a, b }; }
+    }
+  }
+  let P = pts.map(p => { const y0 = seed.a + seed.b * p.x; return { x: p.x, y: y0 + wrapTo(p.y - y0, per), r: Math.abs(wrapTo(p.y - y0, per)) }; }).filter(p => p.r <= Math.max(T, 0.02));
+  if (P.length < 4) return null;
+  let f = null;
+  for (let it = 0; it < 5; it++) {
+    const n = P.length; let mx = 0, my = 0;
+    for (const p of P) { mx += p.x; my += p.y; }
+    mx /= n; my /= n;
+    let sxy = 0, sxx = 0;
+    for (const p of P) { sxy += (p.x - mx) * (p.y - my); sxx += (p.x - mx) ** 2; }
+    const b = sxx ? sxy / sxx : 0;
+    f = { a: my - b * mx, b };
+    const r = pts.map(p => Math.abs(wrapTo(p.y - (f.a + f.b * p.x), per)));
+    const sr = [...r].sort((u, v) => u - v), lim = Math.max(0.004, 3 * sr[sr.length >> 1]);
+    const keep = [];
+    pts.forEach((p, i) => { if (r[i] <= lim) { const y0 = f.a + f.b * p.x; keep.push({ x: p.x, y: y0 + wrapTo(p.y - y0, per) }); } });
+    if (keep.length < 4) break;
+    P = keep;
+  }
+  const res = P.map(p => Math.abs(p.y - (f.a + f.b * p.x))).sort((u, v) => u - v);
+  return { ...f, p90: res[Math.min(res.length - 1, Math.floor(res.length * 0.9))], inl: P.length / pts.length, n: pts.length };
+}
+
+// Zonas de un reloj constante (fase ph, periodo per) con su ataque
+function constZones(env, ph, per, dur) {
+  const zs = [];
+  for (let b0 = 0; ph + (b0 + KZ) * per < dur; b0 += KZ) {
+    const r = kickZone(env, (b) => ph + b * per, b0, KZ, per);
+    if (r) zs.push({ x: b0 + KZ / 2, y: r.off });
+  }
+  return zs;
+}
+
+// Reloj de una rejilla de marcas [{t, bpm}] (como grid.js: entre marcas cabe un número entero de beats)
+function markersClock(g) {
+  const B = [0];
+  for (let i = 1; i < g.length; i++) B.push(B[i - 1] + Math.max(1, Math.round((g[i].t - g[i - 1].t) * g[i - 1].bpm / 60)));
+  return (b) => { let i = 0; while (i + 1 < g.length && B[i + 1] <= b) i++; return g[i].t + (b - B[i]) * 60 / g[i].bpm; };
+}
+
+// Cuántas zonas de un reloj tienen el bombo a ≤ 10 ms de la rejilla (con una rejilla mal medida las zonas
+// promedian golpes desalineados: o no sale bombo claro o sale lejos)
+function clockGood(env, clock, dur, per) {
+  let good = 0;
+  for (let b0 = 0; clock(b0 + KZ) < dur; b0 += KZ) { const r = kickZone(env, clock, b0, KZ, per); if (r && Math.abs(wrapTo(r.off, per)) <= 0.010) good++; }
+  return good;
+}
+
+// → { bpm, firstBeat, grid (null = constante), resid, zones } o null si no hay bombo suficiente para refinar
+export function refineBeatgrid(d, sr, tempo, opts = {}) {
+  const dur = d.length / sr;
+  const env = opts.env || kickEnvelope(d, sr);
+  let per = 60 / tempo.raw.bpm, ph = tempo.raw.phaseTime;
+  let L = null;
+  // hasta tres pasadas: cada una con el reloj ya corregido (las zonas promedian golpes mejor alineados)
+  for (let it = 0; it < 3; it++) {
+    ph = ((ph % per) + per) % per;
+    const zs = constZones(env, ph, per, dur);
+    if (zs.length < 6) return null;
+    const l = robustLine(zs, per);
+    if (!l || l.inl < 0.4) { if (!L) return null; break; }
+    L = l;
+    // ataque de la zona x = ph + x·per + a + b·x → fase y periodo nuevos
+    ph += L.a; per += L.b;
+    if (Math.abs(L.b) < 1e-7 && Math.abs(L.a) < 1e-4) break;
+  }
+  ph = ((ph % per) + per) % per;
+  const nBeats = Math.max(1, (dur - ph) / per);
+  let bpm = 60 / per;
+  // BPM entero si con él la deriva en todo el tema no pasa de 2 ms (se re-centra la fase a mitad del tema)
+  const R = Math.round(bpm), perR = 60 / R;
+  if (Math.abs(perR - per) * nBeats <= 0.002) {
+    const mid = Math.floor(nBeats / 2), tMid = ph + mid * per;
+    ph = ((tMid - mid * perR) % perR + perR) % perR; per = perR; bpm = R;
+  } else bpm = Math.round(bpm * 10000) / 10000;
+  const out = { bpm, firstBeat: ph, grid: null, resid: L.p90, zones: L.n, inliers: L.inl };
+  // la rejilla constante encaja (residuo pequeño) en casi todas las zonas con bombo: es la buena
+  const total = Math.floor(nBeats / KZ);
+  if (L.p90 <= GRID_CONST_TOL && L.inl >= 0.7 && L.n >= 0.75 * total) return out;
+  // si no: ¿tempo variable (directos, temas sin claqueta, saltos de tempo)? Marcas del seguidor de tempo,
+  // desplazadas para que caigan en el ataque, solo si alinean claramente más zonas que la rejilla constante
+  // (con un tempo que cambia, las zonas de la constante promedian golpes desalineados y no salen)
+  const drift = opts.lockedBpm ? null : tempo.drift;
+  if (drift && drift.length > 1) {
+    const cGood = clockGood(env, (b) => ph + b * per, dur, per);
+    let g = drift.map(m => ({ t: m.t, bpm: m.bpm }));
+    const per0 = 60 / g[0].bpm;
+    for (let it = 0; it < 3; it++) {
+      const clock = markersClock(g), zs = [];
+      for (let b0 = 0; clock(b0 + KZ) < dur; b0 += KZ) { const r = kickZone(env, clock, b0, KZ, per0); if (r) zs.push(r.off); }
+      if (zs.length < 6) break;
+      zs.sort((u, v) => u - v);
+      const shift = zs[zs.length >> 1];
+      g = g.map(m => ({ t: m.t + shift, bpm: m.bpm }));
+      if (Math.abs(shift) < 0.0005) break;
+    }
+    const vGood = clockGood(env, markersClock(g), dur, per0);
+    if (vGood >= cGood + Math.max(3, 0.15 * total)) return { ...out, bpm: null, firstBeat: g[0].t, grid: g.map(m => ({ t: Math.round(m.t * 10000) / 10000, bpm: m.bpm })), resid: null, good: [cGood, vGood] };
+  }
+  return out;
 }
 
 // BPM variable: seguimiento de beats por programación dinámica (cada beat se apoya en el anterior
@@ -554,25 +757,29 @@ export function analyze(mono, sr, opts = {}) {
   const of = onsetEnvelope(d, sr2);
   const ol = lowEnvelope(d, sr2);
   const tempo = detectTempo(of.env, ol.env, of.fps, opts.minBpm || 85, opts.maxBpm || 175, of.offset, ol.offset);
-  let bpm = null, firstBeat = 0;
-  if (tempo) {
+  let bpm = null, firstBeat = 0, grid = null, gridFit = null;
+  // con el BPM fijado por el usuario no hace falta (la estructura usa el suyo)
+  const ref = tempo && !opts.lockedBpm && opts.refine !== false ? refineBeatgrid(d, sr2, tempo) : null;
+  if (ref) {
+    gridFit = { resid: ref.resid != null ? +(ref.resid * 1000).toFixed(1) : null, zones: ref.zones };
+    if (ref.grid) { bpm = tempo.bpm; grid = ref.grid; firstBeat = ref.firstBeat; }
+    else { bpm = ref.bpm; firstBeat = ref.firstBeat; }
+  } else if (tempo) {
+    // sin bombo claro (ambient, temas sin percusión grave): la rejilla de detectTempo
     bpm = tempo.bpm;
     const beat = 60 / bpm;
-    const t = tempo.phaseTime + (opts.latencyComp || 0);
-    firstBeat = ((t % beat) + beat) % beat;
+    firstBeat = ((tempo.phaseTime % beat) + beat) % beat;
+    if (tempo.drift && !opts.lockedBpm) grid = tempo.drift.map(m => ({ t: m.t, bpm: m.bpm }));
   }
-  // BPM variable detectado: marcas de beatgrid (la primera coincide con un beat de la rejilla)
-  let grid = null;
-  if (tempo && tempo.drift && !opts.lockedBpm) {
-    grid = tempo.drift.map(m => ({ t: m.t + (opts.latencyComp || 0), bpm: m.bpm }));
-  }
+  if (bpm && opts.latencyComp) firstBeat += opts.latencyComp;
+  if (grid && opts.latencyComp) grid = grid.map(m => ({ t: m.t + opts.latencyComp, bpm: m.bpm }));
   const key = detectKey(d, sr2);
   let struct = { energy: null, sections: [] };
   const sBpm = opts.lockedBpm || bpm, sFirst = opts.lockedBpm ? (opts.lockedFirstBeat || 0) : firstBeat;
   const trackRms = rmsDb(mono);
   try { struct = analyzeStructure(d, sr2, sBpm, sFirst, trackRms); } catch (e) { /* la estructura es opcional */ }
   return {
-    bpm, firstBeat, grid,
+    bpm, firstBeat, grid, gridFit,
     energy: struct.energy, sections: struct.sections, energyCurve: struct.curve || null,
     keyTonic: key ? key.tonic : null, keyMinor: key ? key.minor : null,
     rmsDb: trackRms, energyV: struct.energyV || null,

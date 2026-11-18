@@ -4,7 +4,7 @@ import { TC } from './theme.js';
 import { btn, Fader } from './controls.js';
 import { WaveDetail, WaveOverview, isShown } from './waveform.js';
 import { PlatterGesture, WheelSteps } from './jog-gesture.js';
-import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES } from '../audio/deck.js';
+import { PAD_MODES, PAD_MODE_NAMES, fmtBeats, RANGES, PITCH_FINE } from '../audio/deck.js';
 import { STEMS } from '../audio/stems.js';
 import { peakToMeter } from '../audio/engine.js';
 
@@ -227,8 +227,12 @@ export class DeckUI {
     const pitchCol = el('div', { class: 'pitch-col' },
       this.rangeBtn, this.pitchFader.el, this.pitchPct,
       el('div', { class: 'bend' },
-        btn('−', { cls: 'tiny', onDown: (e) => d.bendDown(-1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend −' }),
-        btn('+', { cls: 'tiny', onDown: (e) => d.bendDown(1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend +' })),
+        btn('−', { cls: 'tiny', onDown: (e) => d.bendDown(-1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend − (mantener: frena un poco y, si sigues, más; Mayús: más fuerte)' }),
+        btn('+', { cls: 'tiny', onDown: (e) => d.bendDown(1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend + (mantener: acelera un poco y, si sigues, más; Mayús: más fuerte)' })),
+      // pitch fino: el fader en pantalla mueve ~0,1 BPM por píxel (±8 %); para cuadrar a mano hace falta 0,01
+      el('div', { class: 'bend pitch-fine', title: 'Pitch fino: ±0,01 BPM' },
+        btn('−.01', { cls: 'micro', onClick: () => d.pitchFine(-PITCH_FINE), title: 'Pitch fino: −0,01 BPM' }),
+        btn('+.01', { cls: 'micro', onClick: () => d.pitchFine(PITCH_FINE), title: 'Pitch fino: +0,01 BPM' })),
       btn('RESET', { cls: 'micro reset-btn', onClick: () => { d.resetTempo(); this.pitchFader.set(0.5, true); } }));
 
     // medidor de nivel vertical del canal (vista Biblioteca; lee los niveles que ya mide el mezclador)
@@ -436,7 +440,8 @@ export class DeckUI {
     setText(this.remain, t && !d.duration ? '--:--.-' : '-' + fmtTime(Math.max(0, d.duration - time)));
     this.remain.classList.toggle('warn', d.playing && d.duration > 0 && d.duration - time < 30);
     const bpm = d.currentBpm;
-    setText(this.bpmEl.firstChild, bpm ? bpm.toFixed(1) : '—');
+    // dos decimales: para cuadrar a mano con el pitch hace falta ver 0,01 BPM (126.97 frente a 127.00)
+    setText(this.bpmEl.firstChild, bpm ? bpm.toFixed(2) : '—');
     const pct = (d.tempo - 1) * 100, pctS = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
     setText(this.tempoEl, pctS);
     setText(this.pitchPct, pctS);
