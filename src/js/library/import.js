@@ -277,7 +277,7 @@ export function mergeInto(t, src, { grid = true, key = true, cues = true, tags =
     if (src.plays && src.plays > (t.plays || 0)) p.plays = src.plays;
   }
   if (grid && src.bpm > 20 && (overwrite || !t.bpmLocked)) {
-    p.bpm = Math.round(src.bpm * 100) / 100; p.firstBeat = src.firstBeat ?? t.firstBeat ?? 0; p.grid = src.grid || null; p.bpmLocked = true;
+    p.bpm = Math.round(src.bpm * 10000) / 10000; p.firstBeat = src.firstBeat ?? t.firstBeat ?? 0; p.grid = src.grid || null; p.bpmLocked = true;
   }
   if (key && src.key && (overwrite || !t.keyLocked)) Object.assign(p, keyFields(src.key));
   if (cues && (src.cues.length || src.loops.length)) {

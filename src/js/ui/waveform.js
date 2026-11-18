@@ -125,6 +125,18 @@ const visible = (c) => { if (!c.isConnected) return false; const s = canvasSize(
 // ¿se ve el elemento? (tamaño observado, sin leer la maquetación en cada frame)
 export const isShown = visible;
 
+// Zoom en segundos REALES (como en las cabinas): una pista acelerada un 3 % se dibuja un 3 % más apretada, así los
+// beats de los dos decks quedan a la misma distancia en pantalla y se ve si los bombos coinciden. Se redondea al
+// 0,2 % para no volver a pintar los mosaicos con cada retoque del pitch (en 6 s de onda son 12 ms como mucho)
+export const tempoScale = (d) => (d && !d.isYT && d.tempo > 0 ? Math.round(d.tempo * 500) / 500 : 1);
+// Deck con el que comparar la fase: el maestro del sync o, si no, el otro deck visible que suena
+function phaseRef(app, d) {
+  const m = app.syncMgr && app.syncMgr.master(d);
+  if (m && m.playing) return m;
+  const vis = (o) => !app.isDeckVisible || app.isDeckVisible(o.idx);
+  return (app.decks || []).find(o => o !== d && o.track && !o.isYT && o.bpm && o.playing && vis(o)) || null;
+}
+
 // Forma de onda pre-dibujada por mosaicos de TILE px (CSS) para una escala (px/s), alto y color dados: al
 // reproducir solo se copian 2-4 mosaicos por frame en vez de calcular y pintar cada columna
 const TILE = 512;
@@ -196,7 +208,7 @@ export class WaveDetail {
     this.c.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       if (this.deck.isYT) return ytSeek(e, false);
-      g.move(e.clientX, this.zoom / (canvasSize(this.c).w || 1));
+      g.move(e.clientX, this.zoom * tempoScale(this.deck) / (canvasSize(this.c).w || 1));
     });
     const up = (e) => {
       if (!dragging) return;
@@ -221,7 +233,11 @@ export class WaveDetail {
     // sin cambios desde el último frame (deck parado, nada tocado): no se redibuja; el tema entra en la clave
     const blink = d.duration - t < 30 && d.playing ? Math.floor(performance.now() / 400) % 2 : 0;
     const ph = playheadFrac(this.app);
-    const key = `${w}|${h}|${dpr}|${this.zoom}|${ph}|${Math.round(t * (w / this.zoom) * dpr)}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
+    const ts = tempoScale(d);
+    // marcas de beat del otro deck (el maestro o el que suena): se mueven aunque este deck esté parado
+    const ref = d.track && !d.isYT && d.bpm ? phaseRef(this.app, d) : null;
+    const refKey = ref ? `${ref.idx}|${Math.round(ref.time * (w / this.zoom / tempoScale(ref)) * dpr)}` : '';
+    const key = `${w}|${h}|${dpr}|${this.zoom}|${ts}|${ph}|${Math.round(t * (w / this.zoom / ts) * dpr)}|${refKey}|${this.app.waveLayout}|${blink}|${this.wave ? 1 : 0}|${TC['wave-bg']}|${DECK_COLORS[d.idx]}`;
     if (!this.dirty && key === this.lastKey) return;
     this.dirty = false; this.lastKey = key;
     if (diag) diag.waveDrawn();
@@ -235,7 +251,8 @@ export class WaveDetail {
       return;
     }
     if (d.isYT) return drawYouTube(ctx, w, h, d, true);
-    const pxPerSec = w / this.zoom;
+    // px por segundo de PISTA (zoom en segundos reales: ver tempoScale)
+    const pxPerSec = w / this.zoom / ts;
     // cabezal en `phx` (ajuste «Posición del cabezal»): todo lo demás se coloca con xOf, relativo a él
     const phx = Math.round(w * ph);
     const t0 = t - phx / pxPerSec;
@@ -280,6 +297,25 @@ export class WaveDetail {
       }
     }
 
+    // comparación de fase: los beats del otro deck como triángulos de su color en los bordes. Si los dos temas
+    // van en fase, cada triángulo cae sobre una línea del grid de este deck (y sus bombos coinciden)
+    if (ref && d.bpm) {
+      const rt = ref.time, rs = Math.max(0.05, Math.abs(ref.speed || ref.tempo || 1));
+      const realPx = w / this.zoom;                 // px por segundo real
+      const span = (w / realPx) * rs;               // segundos de la pista del otro deck que caben
+      const r0 = Math.floor(ref.beatAt(rt - (phx / realPx) * rs)), r1 = Math.ceil(ref.beatAt(rt + span));
+      const step = realPx * 60 / (ref.bpm * rs) < 6 ? 4 : 1;
+      ctx.fillStyle = DECK_COLORS[ref.idx];
+      for (let b = r0; b <= r1; b++) {
+        if (b % step) continue;
+        const x = phx + (ref.beatTime(b) - rt) / rs * realPx;
+        if (x < -6 || x > w + 6) continue;
+        const s = ((b % 4) + 4) % 4 === 0 ? 6 : 4;
+        ctx.beginPath(); ctx.moveTo(x - s, 0); ctx.lineTo(x + s, 0); ctx.lineTo(x, s + 1); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x - s, h); ctx.lineTo(x + s, h); ctx.lineTo(x, h - s - 1); ctx.fill();
+      }
+    }
+
     // marcas del beatgrid (BPM variable): línea naranja con rombo abajo y, donde cambia el tempo,
     // una etiqueta con el BPM nuevo (y la flecha de subida/bajada)
     if (d.hasGridMarkers) {
@@ -314,7 +350,7 @@ export class WaveDetail {
     }
     // BPM, tonalidad y energía
     if (d.bpm) {
-      const info = `${d.currentBpm.toFixed(1)} BPM${d.displayKey ? ' · ' + d.displayKey : ''}${d.track.energy ? ' · ⚡' + d.track.energy : ''}`;
+      const info = `${d.currentBpm.toFixed(2)} BPM${d.displayKey ? ' · ' + d.displayKey : ''}${d.track.energy ? ' · ⚡' + d.track.energy : ''}`;
       ctx.font = '700 10px Inter, sans-serif'; ctx.textAlign = 'right';
       const tw = ctx.measureText(info).width + 10;
       ctx.fillStyle = TC['wave-chip']; ctx.fillRect(w - tw - 4, 2, tw, 14);

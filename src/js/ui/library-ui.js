@@ -5,8 +5,9 @@ import { SMART_FIELDS, SMART_OPS, CRATE_SORTS, SEARCH_FIELDS, searchFields, sear
 import { FilesBrowser } from './files-ui.js';
 import { cratePath, pathLabel, effectiveColor } from '../library/crate-tree.js';
 import { treeFiles } from '../library/folder-crates.js';
-import { COLUMNS, COL_BY_KEY, DEFAULT_COLS, visibleColumns, columnTemplate, columnsFor } from '../library/columns.js';
+import { COL_BY_KEY, DEFAULT_COLS, MENU_COLS, visibleColumns, columnTemplate, columnsFor } from '../library/columns.js';
 import { ENERGY_MODES } from '../ai/assistant.js';
+import { needsGrid } from '../analysis/analyzer.js';
 
 // Columnas: catálogo en library/columns.js. Las que se ven dependen de las elegidas por el usuario
 // (clic derecho en la cabecera; settings.libCols o, por crate, settings.libColsByView) y de cuántas caben
@@ -48,10 +49,13 @@ const ICON = {
   closed: 'M9 6l6 6-6 6',
   rail: 'M4 5h16v14H4z M9 5v14',
   files: 'M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z M3 10h18',
+  pc: 'M3 5h18v11H3z M8 20h8 M12 16v4',
+  disk: 'M3 13l2.5-7h13l2.5 7v5H3z M3 13h18 M17 16h.01',
+  fav: 'M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z',
   filter: 'M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14z M20 20l-4-4 M8 11h6'
 };
 // Todas, Prepare, Historial y Archivos en gris del tema; IA morado, crates ámbar, smart verde, YouTube rojo y Spotify verde
-const ICON_COLOR = { lib: 'var(--ico-lib)', ai: '#c792ff', prep: 'var(--ico-prep)', hist: 'var(--ico-hist)', files: 'var(--ico-lib)', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
+const ICON_COLOR = { lib: 'var(--ico-lib)', ai: '#c792ff', prep: 'var(--ico-prep)', hist: 'var(--ico-hist)', files: 'var(--ico-lib)', pc: 'var(--ico-lib)', disk: 'var(--ico-lib)', fav: '#f2b544', crate: '#f2b544', smart: '#3fd6a4', yt: '#ff5a5a', sp: '#3ddc84' };
 function icon(name, size = 18, color = null, width = 2, cls = 'ico') {
   const NS = 'http://www.w3.org/2000/svg', s = document.createElementNS(NS, 'svg'), p = document.createElementNS(NS, 'path');
   // un color var(--…) no vale como atributo de SVG: va en el estilo
@@ -71,7 +75,8 @@ const RAIL = [
   { k: 'smart', label: 'Smart', icon: 'smart', sec: 'smart', title: 'Ir a las smart crates' },
   { k: 'yt', label: 'YouTube', icon: 'yt', sec: 'online', at: '.side-item.yt', title: 'Ir a los vídeos y listas de YouTube' },
   { k: 'sp', label: 'Spotify', icon: 'sp', sec: 'online', at: '.side-item.spotify', title: 'Ir a las listas importadas de Spotify' },
-  { k: 'hist', label: 'Historial', icon: 'hist', sec: 'library', at: '[data-node="history"]', title: 'Ir al historial' }
+  { k: 'hist', label: 'Historial', icon: 'hist', sec: 'library', at: '[data-node="history"]', title: 'Ir al historial' },
+  { k: 'files', label: 'Carpetas', icon: 'files', sec: 'folders', title: 'Ir a las carpetas del equipo (árbol de carpetas)', files: true }
 ];
 
 export class LibraryUI {
@@ -120,7 +125,7 @@ export class LibraryUI {
     this.railSel = null;          // botón de la barra de iconos pulsado (hasta cambiar de vista)
     this.treeQ = '';
     this.side = el('nav', { class: 'lib-side', 'aria-label': 'Biblioteca' });
-    this.treeIn = el('input', { class: 'side-search', type: 'search', placeholder: 'Buscar crates y listas…', 'aria-label': 'Buscar crates y listas' });
+    this.treeIn = el('input', { class: 'side-search', type: 'search', placeholder: 'Buscar crates, listas y carpetas…', 'aria-label': 'Buscar crates, listas y carpetas desplegadas' });
     this.treeIn.addEventListener('input', debounce(() => { this.treeQ = this.treeIn.value.trim(); this.renderSide(); }, 100));
     this.treeIn.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); if (this.treeIn.value) { this.treeIn.value = ''; this.treeQ = ''; this.renderSide(); } else this.treeIn.blur(); }
@@ -141,7 +146,7 @@ export class LibraryUI {
       this.tree,
       el('div', { class: 'side-foot' }, addBtn, impBtn));
     this.side.addEventListener('focusin', () => { this.focus = 'side'; this.root.classList.add('side-focus'); });
-    this.rail = el('nav', { class: 'lib-rail', 'aria-label': 'Secciones de la biblioteca' }, ...RAIL.map(r => {
+    this.rail = el('nav', { class: 'lib-rail', 'aria-label': 'Secciones de la biblioteca' }, ...RAIL.filter(r => !r.files || this.files.available).map(r => {
       const b = el('button', { class: 'rail-btn', type: 'button', title: r.title, 'aria-pressed': 'false', dataset: { k: r.k } }, icon(r.icon, 22, ICON_COLOR[r.icon]), el('span', {}, r.label));
       b.addEventListener('click', () => this.railGo(r));
       return b;
@@ -194,7 +199,7 @@ export class LibraryUI {
       prep: qb('Prepare', 'prep', 'Prepare: tu lista de preparación (arrastra pistas aquí o al nodo Prepare)', () => this.setView('prepare')),
       hist: qb('Historial', 'hist', 'Historial: abre la última sesión (todas, en el árbol)', () => this.openLastSession()),
       explore: qb('Explorar', 'smart', 'Explorar: filtra la vista abierta por género, BPM y artista', () => this.toggleExplore()),
-      files: qb('Archivos', 'files', 'Archivos: navega por las carpetas y unidades del equipo y carga o añade su música', () => this.setView(this.viewId === 'files' ? 'all' : 'files')),
+      files: qb('Archivos', 'files', 'Archivos: las carpetas del equipo en árbol (barra lateral); pulsa una y su música, con la de sus subcarpetas, sale en la lista', () => { if (this.viewId === 'files') return this.setView('all'); this.setView('files'); this.files.reveal(); }),
       add: qb('Añadir', 'plus', 'Añadir archivos o una carpeta de música', (e) => this.menuAt(e.currentTarget, [
         { label: 'Archivos…', fn: () => this.app.addFiles(false) },
         { label: 'Carpeta…', fn: () => this.app.addFiles(true) }
@@ -208,7 +213,7 @@ export class LibraryUI {
       this.sideToggle,
       el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.quick, this.aiMode, this.fieldsBtn, this.searchIn, this.lockBtn,
       btn('✨ Pedir set', { cls: 'small ai-btn', title: 'Describe un set con tus palabras y la IA lo crea con tu música', onClick: () => this.app.aiPromptDialog() }),
-      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten (respeta tus BPM corregidos)' }),
+      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined || needsGrid(t)))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten, también las que tienen el beatgrid de una versión anterior (respeta tus BPM corregidos)' }),
       this.cleanBtn, this.menuBtn);
     this.head = el('div', { class: 'lib-head', style: { gridTemplateColumns: GRID }, title: 'Clic: ordenar · clic derecho: elegir columnas' });
     this.head.addEventListener('contextmenu', (e) => { e.preventDefault(); this.columnsMenu(e); });
@@ -237,6 +242,7 @@ export class LibraryUI {
   }
 
   // ------------------------------------------------------------ barra lateral
+  icon(...a) { return icon(...a); }
   // Fila del árbol: botón con triángulo (o hueco), icono del tipo, nombre y contador. «id» = vista que abre;
   // sin id (opts.node) es un nodo que solo se pliega (Historial)
   sideItem(id, label, count, opts = {}) {
@@ -499,7 +505,6 @@ export class LibraryUI {
     if (hit('Todas las pistas')) lib.push(this.sideItem('all', 'Todas las pistas', local, { icon: 'lib', menu: libMenu }));
     if (hit('Siguiente pista (IA)')) lib.push(this.sideItem('ai:next', 'Siguiente pista (IA)', null, { icon: 'ai', cls: 'ai' }));
     if (hit('Prepare')) lib.push(this.sideItem('prepare', 'Prepare', L.prepare.length, { icon: 'prep', drop: (ids) => L.addToPrepare(ids), menu: [{ label: 'Vaciar Prepare', fn: () => L.removeFromPrepare([...L.prepare]) }] }));
-    if (this.files.available && hit('Archivos')) lib.push(this.sideItem('files', 'Archivos', null, { icon: 'files', title: 'Carpetas y unidades del equipo: carga su música en un deck o añádela a la biblioteca' }));
     const sessions = L.history.slice().reverse().slice(0, 30);
     const shown = q && !hit('Historial') ? sessions.filter(h => hit(this.sessionLabel(h))) : sessions;
     if (shown.length || hit('Historial')) {
@@ -530,8 +535,11 @@ export class LibraryUI {
       icon: 'yt', cls: 'yt', title: 'Lista de YouTube', menu: () => this.ytListMenu(p)
     })));
     online.push(...this.lib.sortedCrates(this.app.settings.crateSort).filter(c => this.isOnlineCrate(c) && hit(c.name)).map(c => this.crateItem({ c, depth: 0, hasKids: false, open: false })));
+    // CARPETAS (solo escritorio): favoritas y el árbol «Carpetas del equipo» (files-ui.js)
+    const folders = this.files.available ? [this.group('folders', 'CARPETAS', null, this.files.sideItems(hit))] : [];
     const groups = [
       this.group('library', 'BIBLIOTECA', null, lib),
+      ...folders,
       this.group('crates', 'CRATES', el('span', { class: 'sec-btns' }, this.secBtn('Nuevo', 'Nuevo crate (para un subcrate: clic derecho en la crate → «Nuevo subcrate…» o arrastra una crate sobre otra)', () => this.newCrate(null)), this.sortBtn()), crates, this.cratesHead()),
       this.group('smart', 'SMART CRATES', this.secBtn('Nuevo', 'Nuevo smart crate', () => this.smartEditor()), smart),
       this.group('online', 'LISTAS ONLINE', this.secBtn('Importar', 'Importar lista de YouTube, Spotify o M3U', (b) => this.importMenu(b)), online)
@@ -550,7 +558,7 @@ export class LibraryUI {
   keyOf(it) { return it.dataset.view || 'node:' + it.dataset.node; }
   itemFor(key) {
     if (!key) return null;
-    return this.tree.querySelector(key.startsWith('node:') ? `.side-item[data-node="${key.slice(5)}"]` : `.side-item[data-view="${CSS.escape(key)}"]`);
+    return this.tree.querySelector(key.startsWith('node:') ? `.side-item[data-node="${CSS.escape(key.slice(5))}"]` : `.side-item[data-view="${CSS.escape(key)}"]`);
   }
   curItem() { return this.itemFor(this.sideCur) || this.tree.querySelector('.side-item.on') || this.tree.querySelector('.side-item'); }
   setSideCur(x) {
@@ -590,6 +598,7 @@ export class LibraryUI {
     if (k === 'smart') return 'smart';
     if (k === 'yt' || id === 'yt-all') return 'yt';
     if (k === 'history') return 'hist';
+    if (id === 'files') return 'files';
     return null;
   }
   updateRailSel() {
@@ -603,6 +612,7 @@ export class LibraryUI {
     if (!this.side.offsetWidth) { this.root.classList.toggle('tree-toggled'); this.placeSideRs(); }
     if (this.treeQ && !this.tree.querySelector(`.side-group[data-sec="${r.sec || 'library'}"]`)) { this.treeIn.value = ''; this.treeQ = ''; this.renderSide(); }
     if (r.k === 'hist' && !this.app.settings.libHistOpen && this.lib.history.length) this.setHistOpen(true);
+    if (r.k === 'files' && !this.files.openKeys().has('fd-root')) this.files.setOpen('fd-root', true);
     this.updateRailSel();
     const g = this.tree.querySelector(`.side-group[data-sec="${r.sec || 'library'}"]`);
     if (!g) return;
@@ -628,11 +638,12 @@ export class LibraryUI {
       it.classList.toggle('on', on);
       if (on) it.setAttribute('aria-current', 'true'); else it.removeAttribute('aria-current');
     }
-    this.setSideCur(id);
+    if (id === 'files') this.files.markSide();
+    this.setSideCur(id === 'files' ? this.tree.querySelector('.fd-item.on') || id : id);
     this.updateRailSel();
     this.revealActive();
-    // con columnas por crate, cada vista tiene las suyas
-    if (this.app.settings.libColsSame === false) this.relayout(); else this.refresh();
+    // con columnas por crate, cada vista tiene las suyas; el panel Archivos añade «Carpeta»
+    if (this.app.settings.libColsSame === false || wasFiles !== (id === 'files')) this.relayout(); else this.refresh();
     this.scroller.scrollTop = 0;
   }
 
@@ -671,7 +682,10 @@ export class LibraryUI {
     this.root.classList.toggle('files-view', this.viewId === 'files');
     const fields = this.app.settings.searchFields;
     if (isAi) this.rows = searchTracks(this.app.ai.suggest(80), this.search, fields);
-    else if (this.viewId === 'files') this.rows = sortTracks(searchTracks(this.files.rows(), this.search, fields), this.sort);
+    else if (this.viewId === 'files') {
+      const list = searchTracks(this.files.rows(), this.search, fields);
+      this.rows = this.sort.field === 'folder' ? this.files.sortByFolder(list, this.sort.dir) : sortTracks(list, this.sort);
+    }
     else this.rows = this.lib.query(this.viewId, this.search, this.viewId.startsWith('history:') && !this.sort.field ? null : this.sort, fields);
     if (this.explore.on) this.rows = this.applyExplore(this.rows);
     this.refreshQuick();
@@ -703,13 +717,14 @@ export class LibraryUI {
     this.empty.style.display = empty ? 'flex' : 'none';
     if (empty) {
       this.empty.innerHTML = '';
+      // dentro de la tabla, debajo de la cabecera (sin tapar la barra de la carpeta ni Explorar)
+      this.empty.style.top = (this.scroller.offsetTop || 70) + 'px';
       if (this.viewId === 'all' && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Tu biblioteca está vacía'), el('p', {}, 'Arrastra aquí archivos o carpetas de música, o usa «+ Añadir música» en la barra lateral.')));
       else if (this.viewId === 'ai:next' && !this.app.ai.refDeck()) this.empty.append(el('div', {}, el('h3', {}, '✨ Sugerencias de la IA'), el('p', {}, 'Carga una pista en un deck y aquí verás las que mejor mezclan con ella: BPM dentro del rango de mezcla (±6 %), mismo género o compatible, tonalidad y energía.')));
       else if (this.viewId === 'ai:next') this.empty.append(el('p', {}, 'No hay pistas analizadas que encajen (BPM a ±6 % y género compatible). Analiza tu biblioteca con «Analizar».'));
       else if (this.viewId === 'files' && !this.search) {
-        const d = this.files.dir;
-        this.empty.append(el('div', {}, el('h3', {}, d ? 'No hay archivos de audio en esta carpeta' : 'Archivos'),
-          el('p', {}, d ? 'Abre una subcarpeta en las columnas de arriba.' : 'Elige Música, Documentos o una unidad en las columnas de arriba. Los archivos de audio de la carpeta salen aquí: arrástralos a un deck para pincharlos o a una crate para añadirlos.')));
+        const [h, p] = this.files.emptyText();
+        this.empty.append(el('div', { class: 'fb-empty' }, el('h3', {}, h), p ? el('p', {}, p) : null));
       } else if (this.viewId.startsWith('yt') && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Sin vídeos de YouTube'), el('p', {}, 'En la barra lateral, pulsa «+ Importar» en LISTAS ONLINE → «Lista de YouTube…» y pega la URL de una lista de reproducción.')));
       else this.empty.append(el('p', {}, 'No hay resultados.'));
     }
@@ -869,7 +884,9 @@ export class LibraryUI {
     const dense = this.dense();
     this.root.classList.toggle('dense', dense);
     this._max = this.colMax();
-    this.cols = visibleColumns(this.chosenCols(), this._max);
+    // panel Archivos con subcarpetas: columna «Carpeta» (en qué subcarpeta está cada pista)
+    const fd = this.viewId === 'files' && this.files.dir && this.files.dir.rec;
+    this.cols = visibleColumns(fd ? [...this.chosenCols(), 'folder'] : this.chosenCols(), this._max);
     const art = this.cols.some(c => c.key === 'art');
     const sizes = dense ? DENSE_ART : ART_SIZES;
     const size = sizes[this.app.settings.libArtSize] || sizes.small;
@@ -898,9 +915,9 @@ export class LibraryUI {
     const mark = (on) => (on ? '✓ ' : ' ');
     const hidden = new Set(visibleColumns(this.chosenCols()).map(c => c.key)); for (const c of this.cols) hidden.delete(c.key);
     this.app.contextMenu(e, [
-      ...COLUMNS.filter(c => !c.fixed).map(c => ({
+      ...MENU_COLS.map(c => ({
         label: mark(chosen.has(c.key)) + (c.menu || c.label) + (hidden.has(c.key) ? ' (no cabe en esta pantalla)' : ''),
-        fn: () => { const k = new Set(chosen); k.has(c.key) ? k.delete(c.key) : k.add(c.key); this.setChosenCols(COLUMNS.filter(x => !x.fixed && k.has(x.key)).map(x => x.key)); }
+        fn: () => { const k = new Set(chosen); k.has(c.key) ? k.delete(c.key) : k.add(c.key); this.setChosenCols(MENU_COLS.filter(x => k.has(x.key)).map(x => x.key)); }
       })),
       { label: mark(s.libColsSame !== false) + 'Mismas columnas en todos los crates', fn: () => this.app.setSetting('libColsSame', s.libColsSame === false) },
       { label: 'Tamaño de la carátula', sub: [['small', 'Pequeña'], ['medium', 'Mediana']].map(([k, v]) => ({ label: mark((s.libArtSize || 'small') === k) + v, fn: () => this.app.setSetting('libArtSize', k) })) },
@@ -996,7 +1013,13 @@ export class LibraryUI {
       }
       case 'title': return el('span', { class: 'c-title', title: ctx.ai ? ctx.ai.reasons.join(' · ') : '' }, t.title || '—', ctx.ai && ctx.ai.why ? el('small', { class: 'ai-why' }, ctx.ai.why) : null, t.energy ? el('small', { class: 'nrg', title: 'Energía estimada por la IA (1-10)' }, '⚡' + t.energy) : null, t.stems ? el('small', { class: 'stm', title: 'Stems separados (voz, batería, bajo, melodía)' }, 'STEMS') : null);
       case 'artist': return el('span', { class: 'c-artist' }, t.artist || '');
-      case 'bpm': return el('span', { class: 'num c-bpm' }, t.bpm ? (Math.round(t.bpm * 10) / 10).toString() : '');
+      case 'folder': {
+        // subcarpeta dentro de la abierta («House › Deep»); las de la misma carpeta, con su nombre en gris
+        const r = this.files.relFolder(t), d = this.files.dir;
+        return r ? el('span', { class: 'c-folder', title: r }, r.replace(/\\/g, ' › ')) : el('span', { class: 'c-folder dim', title: 'En la carpeta abierta' }, d ? d.name : '');
+      }
+      // dos decimales si no es entero (131,9971 → 132, 132,195 → 132.20): para elegir a qué pitch cuadrar
+      case 'bpm': return el('span', { class: 'num c-bpm' }, t.bpm ? (Math.abs(t.bpm - Math.round(t.bpm)) < 0.005 ? String(Math.round(t.bpm)) : t.bpm.toFixed(2)) : '');
       case 'camelot': { const ok = ctx.akey && camelotCompatible(ctx.akey, t.camelot); return el('span', { class: 'num key' + (ok ? ' compat' : ''), style: { color: keyColor(t.camelot) } }, (ok ? '◉ ' : '') + (t.camelot || t.key || '')); }
       case 'duration': return el('span', { class: 'num' }, t.duration ? fmtTime(t.duration, false) : '');
       case 'rating': return this.ratingCell(t);
@@ -1142,6 +1165,8 @@ export class LibraryUI {
       return true;
     }
     if (key.startsWith('history:')) { if (dir > 0) return false; this.focusSideKey('node:history'); return true; }
+    // árbol de carpetas: → despliega, ← pliega o sube a la carpeta de arriba
+    if (/^node:(fd|fv)[:-]/.test(key)) { const r = this.files.sideKey(key, dir); this.curItem()?.scrollIntoView({ block: 'nearest' }); return r || dir < 0; }
     const c = key.startsWith('crate:') ? this.lib.crate(key.slice(6)) : null;
     if (!c) return dir < 0;
     const hasKids = this.lib.subcrateIds(c.id).length > 0, isOpen = hasKids && !this.collapsedCrates().has(c.id);

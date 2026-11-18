@@ -101,6 +101,8 @@ export function buildActions(app) {
     add(p + 'censor', 'Censor (mantener)', 'button', (on) => d.censor(on), g);
     add(p + 'bendminus', 'Pitch bend −', 'button', (on) => (on ? d.bendDown(-1) : d.bendUp()), g);
     add(p + 'bendplus', 'Pitch bend +', 'button', (on) => (on ? d.bendDown(1) : d.bendUp()), g);
+    add(p + 'pitchfineminus', 'Pitch fino −0,01 BPM', 'button', press(() => d.pitchFine(-0.01)), g);
+    add(p + 'pitchfineplus', 'Pitch fino +0,01 BPM', 'button', press(() => d.pitchFine(0.01)), g);
     add(p + 'pitch', 'Fader de pitch', 'abs', (v) => d.setPitchFader((app.settings.invertPitch ? 1 : -1) * (v * 2 - 1)), g);
     add(p + 'jog', 'Jog / plato (relativo)', 'rel', (v) => d.jogTurn(v, REF_TICKS_PER_REV), g);
     add(p + 'jogtouch', 'Toque del plato', 'button', (on) => d.jogTouch(on), g);

@@ -1,5 +1,29 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.8 · noviembre de 2026
+
+### Cuadrar dos temas: el grid y el SYNC, al milisegundo
+- Arreglado: con muchos temas **el beat se iba** aunque el SYNC estuviera puesto. La culpa era de la **rejilla (beatgrid)**: el BPM se redondeaba (a 0,01 o al entero más cercano), el primer beat caía unos milisegundos tarde o en el contratiempo y, en temas de tempo constante, se colaban marcas de BPM variable con saltos. En un tema de 6 minutos eso son decenas o cientos de milisegundos: los dos bombos acaban sonando como un galope.
+- Ahora el análisis escucha **los golpes de bombo de todo el tema**: ajusta el **BPM con 4 decimales** (por ejemplo 131,9971 o 142,4891) y pone el **primer beat justo en el ataque del bombo**. Si el tema es de tempo constante (casi toda la música electrónica), **la rejilla es constante**, sin saltos.
+- Medido con **14 temas reales** de house, trance, makina, remember y bases: la rejilla se separaba del bombo **hasta 229 ms**; ahora, **como mucho 8 ms** del principio al final del tema (casi siempre 1-4 ms). Con dos temas a distinto BPM y **SYNC durante 3 minutos**, los bombos se separaban **hasta 189 ms**; ahora **menos de 7 ms**, también con **KEY LOCK**.
+- Tus pistas ya analizadas **se vuelven a analizar solas** al cargarlas en un deck (o con **Analizar**) para tener la rejilla nueva. Si corregiste tú el BPM o el grid, se respeta.
+
+### Cuadrar a mano, como en cabina
+- **BPM con dos decimales** en el deck, en la forma de onda y en la biblioteca (127.97 no es 128.00).
+- **Pitch fino**: botones **−.01** y **+.01** debajo del pitch, ±0,01 BPM por pulsación. También se pueden asignar a la controladora (**Pitch fino −0,01 BPM / +0,01 BPM**).
+- **Pitch bend progresivo** (botones − y + del pitch, teclado y controladora): empieza suave (±1 %) para retoques de unos milisegundos y, si lo mantienes, sube hasta ±4 % en 1,5 s (con Mayús, hasta ±12 %).
+- **Comparación de fase en la forma de onda**: los beats del otro deck salen como **triángulos de su color** arriba y abajo de la onda. Si caen sobre las líneas del grid, los bombos coinciden; si van por delante o por detrás, ves hacia dónde empujar. El zoom va en segundos reales: con dos temas a distinto pitch, los beats quedan a la misma distancia en pantalla.
+
+### Las carpetas, en árbol
+- El panel **Archivos** es ahora un **árbol de carpetas en la barra lateral**, como en otros programas DJ: en **CARPETAS** despliega **«Carpetas del equipo»** y verás **Música, Documentos, Escritorio, Descargas y tus unidades**. Cada carpeta se despliega con **▸** (o con las flechas ← →) y sus subcarpetas salen debajo.
+- **Al pulsar una carpeta, su música sale en la lista de la derecha, también la de sus subcarpetas**: si tienes una carpeta con tus estilos (House, Trance, Makina…), al pulsarla lo ves todo. La columna **«Carpeta»** te dice en qué subcarpeta está cada tema. Con **«Incluir subcarpetas»** (activado) eliges si quieres verlas; se buscan hasta 5.000 archivos y 6 niveles, y ves cómo avanza la búsqueda.
+- **Carpetas favoritas**: clic derecho en una carpeta → **«Añadir a favoritos»**. Salen arriba del árbol con **★** (por ejemplo, tu carpeta «Para sesión»).
+- La app **recuerda la última carpeta** y las que tenías desplegadas. Lo de siempre sigue igual: arrastrar a un deck o a una crate, **«Añadir esta carpeta a la biblioteca»** y los temas que aún no están en tu biblioteca, más apagados y con ◌.
+- Adiós a las columnas de carpetas encima de la lista y al aviso que se montaba sobre ellas: si una carpeta no tiene música, te lo dice dentro de la lista.
+
+### Botón de pantalla completa
+- Nuevo botón **⛶** arriba a la derecha, junto a los ajustes: pone la app en **pantalla completa** (lo mismo que **F11**). En pantalla completa el icono cambia y te dice cómo salir: con el botón, **F11** o **Esc**.
+
 ## 1.0.0-rc.7 · noviembre de 2026
 
 ### Las sugerencias vuelven a llegar

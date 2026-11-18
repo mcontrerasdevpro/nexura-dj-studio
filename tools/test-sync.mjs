@@ -8,85 +8,13 @@
 // key lock, pitch del deck sincronizado, nudge con el jog, pitch bend, deck parado, cambio de pista con SYNC,
 // elección del maestro (el primero que suena / el elegido / los dos con SYNC) y deck de YouTube.
 // Uso: node tools/test-sync.mjs [--verbose]  (--verbose: los números de cada escenario)
-import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
+import { SR, Q, procs, tasks, later, rnd, Deck, Grid, SyncMod, makeApp, track, simulate, reset, monoBuffer, syncRun } from './sync-sim.mjs';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SR = 48000, Q = 128;
 const VERBOSE = process.env.NEXURA_SYNC_VERBOSE === '1' || process.argv.includes('--verbose');
+void Deck; void rnd; void reset; void monoBuffer; void Q;
 
-// ---------------------------------------------------------------- reloj y tareas de la «interfaz»
-let nowMs = 0;
-globalThis.performance = { now: () => nowMs };
-globalThis.window = {};
-globalThis.document = { getElementById: () => null };
-let seed = 7;
-const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
-const tasks = []; // { at, fn }
-const later = (ms, fn) => tasks.push({ at: nowMs + ms, fn });
-
-// ---------------------------------------------------------------- worklet real en un contexto vm
-const workletSrc = fs.readFileSync(path.join(root, 'src/js/audio/worklets/deck-processor.js'), 'utf8');
-function makeProcessor() {
-  let Cls = null;
-  const port = { onmessage: null, postMessage: null };
-  const ctx = {
-    sampleRate: SR, currentFrame: 0, Math, Float32Array, Int8Array, Int16Array,
-    AudioWorkletProcessor: class { constructor() { this.port = port; } },
-    registerProcessor: (_n, C) => { Cls = C; }
-  };
-  vm.createContext(ctx);
-  vm.runInContext(workletSrc, ctx);
-  const proc = new Cls();
-  return { proc, port, ctx };
-}
-
-// AudioWorkletNode simulado: lo que manda el Deck llega al procesador al empezar el siguiente quantum;
-// lo que manda el procesador llega a la interfaz con 1-6 ms de retraso
-const procs = [];
-globalThis.AudioWorkletNode = class {
-  constructor() {
-    const p = makeProcessor();
-    this.sim = p;
-    const inbox = [];
-    p.inbox = inbox;
-    this.port = { onmessage: null, postMessage: (m) => inbox.push(m) };
-    p.port.postMessage = (m) => later(1 + rnd() * 5, () => this.port.onmessage && this.port.onmessage({ data: m }));
-    procs.push(p);
-  }
-  connect() { return this; }
-};
-const outs = () => [[new Float32Array(Q), new Float32Array(Q)], [new Float32Array(Q), new Float32Array(Q)]];
-
-const { Deck } = await import(pathToFileURL(path.join(root, 'src/js/audio/deck.js')));
-const Grid = await import(pathToFileURL(path.join(root, 'src/js/audio/grid.js')));
-let SyncMod = null;
-try { SyncMod = await import(pathToFileURL(path.join(root, 'src/js/audio/sync.js'))); } catch (_) { /* versión anterior */ }
-
-// ---------------------------------------------------------------- app mínima
-function makeApp(settings = {}) {
-  const toasts = [];
-  const app = {
-    settings: { pitchRange: 0.08, quantize: true, syncPhase: true, motorStart: 4, motorStop: 4, ...settings },
-    engine: { ctx: { sampleRate: SR, currentTime: 0 }, channels: [0, 1, 2, 3].map(() => ({ input: {}, stemIn: {}, set() {} })), resume() {}, effectiveGain: () => 1 },
-    library: { update(id, u) { const t = app.tracks[id]; if (t) Object.assign(t, u); }, guard: () => true, logPlay() {} },
-    tracks: {},
-    toast: (m) => toasts.push(String(m)),
-    toasts, deckCount: 2, emit() {}, on() {},
-    expansions: null
-  };
-  app.decks = [0, 1, 2, 3].map(i => new Deck(app, i));
-  Object.defineProperty(app, 'activeDecks', { get: () => app.decks.slice(0, app.deckCount) });
-  if (SyncMod) app.syncMgr = new SyncMod.SyncManager(app);
-  return app;
-}
-const track = (app, id, bpm, firstBeat, grid, secs = 330) => {
-  const t = { id, path: id, source: 'local', title: id, bpm, firstBeat, grid: grid || null, duration: secs, cues: Array(8).fill(null), loops: Array(8).fill(null), cueLoops: Array(8).fill(null), analyzed: true };
-  app.tracks[id] = t;
-  return t;
-};
 // audio de la pista: bombo en cada beat del grid + bajo de 55 Hz y nota de 220 Hz (el key lock empalma por
 // correlación: con silencio elegiría el peor punto)
 const buffer = (secs, t) => {
@@ -99,38 +27,6 @@ const buffer = (secs, t) => {
   }
   return { sampleRate: SR, duration: secs, numberOfChannels: 1, getChannelData: () => d };
 };
-
-// ---------------------------------------------------------------- simulación
-const TICK_MS = SyncMod ? SyncMod.SYNC_TICK_MS : 250;
-function simulate(app, seconds, events, sample) {
-  const nQ = Math.round(seconds * SR / Q);
-  let nextTick = nowMs + TICK_MS, nextFrame = nowMs + 16.7;
-  const ev = events.slice().sort((a, b) => a.t - b.t);
-  const start = nowMs;
-  for (let q = 0; q < nQ; q++) {
-    const tNow = start + q * Q / SR * 1000;
-    // tareas de la interfaz hasta este instante (mensajes del worklet, temporizadores, eventos de la prueba)
-    for (;;) {
-      let best = -1, at = Infinity;
-      for (let i = 0; i < tasks.length; i++) if (tasks[i].at < at) { at = tasks[i].at; best = i; }
-      const evAt = ev.length ? start + ev[0].t * 1000 : Infinity;
-      const m = Math.min(at, nextTick, nextFrame, evAt);
-      if (m > tNow) break;
-      nowMs = m;
-      if (m === evAt) ev.shift().fn();
-      else if (m === at) tasks.splice(best, 1)[0].fn();
-      else if (m === nextTick) { app.syncMgr ? app.syncMgr.tick() : app.decks.forEach(d => d.syncTick()); nextTick += TICK_MS; }
-      else { app.decks.forEach(d => d.frame && d.frame()); nextFrame += 16.7 + (rnd() - 0.5) * 3; }
-    }
-    nowMs = tNow;
-    for (const p of procs.slice(0, 2)) {
-      p.ctx.currentFrame = q * Q;
-      while (p.inbox.length) p.proc.onMsg(p.inbox.shift());
-      p.proc.process([], outs());
-    }
-    if (sample) sample((q + 1) * Q / SR);
-  }
-}
 
 // Posición que SE OYE (s): con key lock o transposición la salida sale del pitch-shifter con su retardo d
 // (muestras de salida), así que lo que suena es la pista de hace d muestras
@@ -322,6 +218,41 @@ check('Cargar otra pista (131 BPM) en el deck sincronizado: sigue con SYNC, a 12
   const before = A.tempo;
   A.setSync(true);
   check('…ni se usa como maestro de otro deck (el tempo de A no cambia)', A.tempo === before, { tempo: A.tempo });
+}
+
+// 12) deriva medida EN EL AUDIO DE SALIDA tras 3 min (fran4): dos temas sintéticos con BPM no enteros (127,37 y
+// 123,81), analizados con el análisis real (analysis-core.js: BPM, primer beat y marcas), SYNC en el segundo y
+// los bombos medidos en lo que sale de cada deck (tools/beat-medir.mjs), sin y con key lock. Así cuentan a la
+// vez los errores del análisis (BPM redondeado, primer beat desplazado) y los del sync (fase, latencia del key
+// lock). `--core ruta` permite medir con otra versión del análisis.
+{
+  const ci = process.argv.indexOf('--core'), core = ci > 0 ? path.resolve(process.argv[ci + 1]) : path.join(root, 'src/js/analysis/analysis-core.js');
+  const { analyze } = await import(pathToFileURL(core));
+  const { synth } = await import(pathToFileURL(path.join(root, 'tools/test-grid-synth.mjs')));
+  const { bassEnvelope, outputDeviation } = await import(pathToFileURL(path.join(root, 'tools/beat-medir.mjs')));
+  const DUR = 215;
+  const make = (bpm, fb) => {
+    const beats = []; for (let t = fb; t < DUR - 0.3; t += 60 / bpm) beats.push(t);
+    const x = synth(beats, DUR, SR), r = analyze(x, SR, {});
+    const tr = { bpm: r.bpm, firstBeat: r.firstBeat, grid: null };
+    if (r.grid && r.grid.length > 1) Object.assign(tr, Grid.gridUpdate(r.grid, DUR));
+    return { x, track: tr, trueBpm: bpm };
+  };
+  const a = make(127.37, 0.213), b = make(123.81, 0.351);
+  const at = (run, sec) => {
+    const envA = bassEnvelope(run.out[0], SR), envB = bassEnvelope(run.out[1], SR);
+    const clock = (k) => Grid.beatTime(run.tA, k), per = 60 / a.track.bpm;
+    const z = (t) => outputDeviation(envA, envB, clock, Math.round(Grid.beatAt(run.tA, t - 10)), Math.round(Grid.beatAt(run.tA, t + 10)), per).median;
+    return { '0,5 min': z(30), '1,5 min': z(90), '3 min': z(180) };
+  };
+  const sync = await syncRun({ a, b, seconds: 200 });
+  const dev = at(sync, 180);
+  console.log(`   análisis: ${a.trueBpm} → ${a.track.bpm} BPM, ${b.trueBpm} → ${b.track.bpm} BPM · desviación de los bombos en la salida (ms): ${JSON.stringify(dev)}`);
+  check('Audio de salida, SYNC 3 min (127,37 maestro · 123,81 sincronizado, grids analizados): |desviación de los bombos| < 5 ms en todo momento', Object.values(dev).every(v => v != null && Math.abs(v) < 5), dev);
+  const kl = await syncRun({ a, b, seconds: 200, keylockB: true });
+  const devK = at(kl, 180);
+  console.log(`   con key lock en el sincronizado: ${JSON.stringify(devK)}`);
+  check('…con key lock en el sincronizado (+2,9 %): |desviación| < 10 ms (la latencia del key lock se descuenta)', Object.values(devK).every(v => v != null && Math.abs(v) < 10), devK);
 }
 
 console.log(`\n${total - failed}/${total} comprobaciones de sync correctas`);

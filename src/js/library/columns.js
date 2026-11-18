@@ -6,6 +6,8 @@ export const COLUMNS = [
   { key: 'art', label: '', menu: 'Carátula', w: 'var(--art-w, 30px)', min: 24, prio: 15, def: false, nosort: true },
   { key: 'title', label: 'Título', w: 'minmax(var(--col-min-title, 140px), 2.2fr)', prio: 99, fixed: true },
   { key: 'artist', label: 'Artista', w: 'minmax(var(--col-min-text, 100px), 1.5fr)', prio: 90 },
+  // solo en el panel Archivos (subcarpeta de cada pista dentro de la carpeta abierta): no sale en el menú
+  { key: 'folder', label: 'Carpeta', w: 'minmax(90px, 1.1fr)', prio: 85, def: false, files: true },
   { key: 'bpm', label: 'BPM', w: '62px', min: 40, prio: 80 },
   { key: 'camelot', label: 'Key', w: '52px', min: 38, prio: 70 },
   { key: 'duration', label: 'Duración', w: '70px', min: 50, prio: 60 },
@@ -21,6 +23,8 @@ export const COLUMNS = [
 ];
 export const COL_BY_KEY = Object.fromEntries(COLUMNS.map(c => [c.key, c]));
 export const DEFAULT_COLS = COLUMNS.filter(c => c.def !== false).map(c => c.key);
+// las que se pueden elegir con clic derecho en la cabecera
+export const MENU_COLS = COLUMNS.filter(c => !c.fixed && !c.files);
 
 // Columnas que se muestran: las elegidas por el usuario (siempre con las fijas), en el orden del
 // catálogo, y como mucho «max» (se quitan las de menor prioridad)

@@ -70,6 +70,6 @@ export class SyncManager {
       const pick = this.firstPlaying(live.filter(o => o !== m && o.sync)) || this.firstPlaying(live.filter(o => o !== m));
       if (pick) this.set(pick, false);
     }
-    for (const d of this.decks()) d.syncTick();
+    for (const d of this.decks()) { if (d.bendTick) d.bendTick(); d.syncTick(); }
   }
 }

@@ -19,6 +19,8 @@ export const RANGES = [0.08, 0.16, 0.5];
 export const fmtBeats = (b) => b >= 1 ? String(Math.round(b * 1000) / 1000) : '1/' + Math.round(1 / b);
 
 const SEC_PER_REV = 60 / 33.333; // un giro de plato = 1,8 s de audio a 33⅓ rpm
+const BEND_START = 0.01, BEND_RAMP_MS = 1500; // pitch bend: ±1 % al pulsar, hasta el máximo en 1,5 s
+export const PITCH_FINE = 0.01;               // BPM por pulsación del pitch fino
 const YT_SYNC_MSG = 'SYNC no está disponible con vídeos de YouTube: el reproductor oficial no permite ajustar el tempo ni la fase con precisión. Iguala el tempo con el pitch.';
 const frac = (x) => ((x % 1) + 1) % 1;
 const wrapHalf = (x) => (x > 0.5 ? x - 1 : x < -0.5 ? x + 1 : x);
@@ -424,9 +426,29 @@ export class Deck extends Emitter {
     if (v !== this._rateSent) { this._rateSent = v; this.send({ t: 'rate', v }); }
   }
   resetTempo() { this.pitch = 0; this.setTempo(1); this.emit('tempo'); }
+  // Pitch fino: ±dBpm en el BPM que suena (botones −/+ 0,01 junto al pitch y acciones MIDI). Mueve el fader lo
+  // que corresponde (con SYNC, como el fader: cambia el tempo del grupo). Sin BPM, pasos de 0,01 % de tempo.
+  pitchFine(dBpm) {
+    if (!this.track) return;
+    const dt = this.bpm ? dBpm / this.bpm : dBpm / 100;
+    const want = (this.tempo + dt - 1) / this.range;
+    // con SYNC el fader no está en el sitio del tempo: se mueve lo mismo que pide el paso
+    this.setPitchFader(this.followsMaster() ? this.pitch + dt / this.range : want);
+  }
   setBend(v) { this.bend = v; if (!this.isYT) this.send({ t: 'bend', v }); }
-  bendDown(dir, coarse = false) { this.setBend(dir * (coarse ? 0.12 : 0.04)); }
-  bendUp() { this.setBend(0); this.lastNudgeAt = performance.now(); }
+  // Pitch bend (botones, teclas A/S y K/L, MIDI): empieza suave (±1 %, para retoques de unos milisegundos) y, si
+  // se mantiene, sube en 1,5 s hasta ±4 % (±12 % con Mayús) para corregir desfases grandes (`bendTick`)
+  bendDown(dir, coarse = false) {
+    this._bendHold = { dir: dir < 0 ? -1 : 1, max: coarse ? 0.12 : 0.04, at: performance.now() };
+    this.setBend(this._bendHold.dir * BEND_START);
+  }
+  bendUp() { this._bendHold = null; this.setBend(0); this.lastNudgeAt = performance.now(); }
+  bendTick() {
+    const h = this._bendHold; if (!h) return;
+    const k = Math.min(1, (performance.now() - h.at) / BEND_RAMP_MS);
+    const v = h.dir * (BEND_START + (h.max - BEND_START) * k * k);
+    if (Math.abs(v - this.bend) > 1e-4) this.setBend(v);
+  }
   nudge(v) { if (!this.isYT) { this.lastNudgeAt = performance.now(); this.send({ t: 'nudge', v }); } }
   // adelanta (+) o atrasa (−) `sec` segundos sonando, con un cambio de velocidad pequeño (rueda del ratón)
   nudgeBy(sec) { if (!this.isYT && this.playing && sec) { this.lastNudgeAt = performance.now(); this.send({ t: 'nudgeBy', v: sec * this.sr }); } }
@@ -951,9 +973,9 @@ export class Deck extends Emitter {
     if (this.track && !this.gridEditable()) return;
     if (!this.bpm) return;
     if (this.hasGridMarkers) return this.saveGrid(this.gridMarkers().map(m => ({ t: m.t, bpm: m.bpm * f })));
-    this.setBpm(Math.round(this.bpm * f * 100) / 100);
+    this.setBpm(Math.round(this.bpm * f * 10000) / 10000);
   }
-  bpmNudge(d) { if (this.bpm) this.setBpm(Math.round((this.bpm + d) * 1000) / 1000); }
+  bpmNudge(d) { if (this.bpm) this.setBpm(Math.round((this.bpm + d) * 10000) / 10000); }
   gridShift(ms) {
     if (this.track && !this.gridEditable()) return;
     if (!this.track || !this.bpm) return;

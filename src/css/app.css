@@ -460,6 +460,11 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 .pitch-col { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .pitch-pct { font: 10px var(--mono); color: var(--muted); }
 .bend { display: flex; gap: 3px; }
+/* pitch fino ±0,01 BPM: uno encima del otro (la columna del pitch mide 50 px) */
+.bend.pitch-fine { flex-direction: column; gap: 2px; }
+.pitch-fine .micro { padding: 1px 4px; font: 9.5px var(--mono); min-width: 0; }
+/* botón de pantalla completa de la barra superior (⛶) */
+.fs-btn svg { display: block; margin: auto; }
 
 .platter-col { display: flex; flex-direction: column; gap: 8px; align-items: center; position: relative; }
 .platter-wrap { position: relative; width: 190px; height: 190px; }
@@ -1550,33 +1555,27 @@ body.view-lib .lib-quick { display: inline-flex; gap: 3px; flex: none; }
 .ctl-models li { margin-bottom: 3px; }
 .status-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 
-/* panel Archivos: barra (ruta, número de archivos y «Añadir esta carpeta») y columnas desplazables */
-.lib-files { display: flex; flex-direction: column; gap: 5px; height: 186px; padding: 6px 8px; border-bottom: 1px solid var(--side-line); flex: none; }
-.fb-bar { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.fb-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
-.fb-status { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+/* panel Archivos: árbol de carpetas en la barra lateral (grupo CARPETAS) y, sobre la tabla, la barra de la
+   carpeta abierta (↑, ruta, progreso de la búsqueda, «Incluir subcarpetas» y «Añadir esta carpeta») */
+.lib-files { display: flex; flex-direction: column; padding: 5px 8px; border-bottom: 1px solid var(--side-line); flex: none; }
+.fb-bar { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; row-gap: 4px; }
+.fb-up { flex: none; }
+.fb-path { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
+.fb-status { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.fb-status.warn { color: var(--warn); }
+.fb-status.scanning::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: fb-spin .8s linear infinite; }
+@keyframes fb-spin { to { transform: rotate(360deg); } }
+.fb-rec { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); cursor: pointer; white-space: nowrap; }
 .fb-add { flex: none; }
-.fb-cols { flex: 1; min-height: 0; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.fb-col { flex: 0 0 210px; display: flex; flex-direction: column; min-height: 0; background: var(--side-bg); border: 1px solid var(--side-line); border-radius: var(--radius); overflow: hidden; }
-.fb-roots { flex-basis: 230px; }
-.fb-head { display: flex; justify-content: space-between; gap: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--side-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fb-head small { font: 10px var(--mono); }
-.fb-list { flex: 1; min-height: 0; overflow: auto; }
-.fb-sep { padding: 5px 8px 2px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
-.fb-item { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; height: 22px; padding: 0 6px 0 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
-.fb-item i { flex: none; width: 14px; font-style: normal; text-align: center; color: var(--muted); }
-.fb-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fb-item b { flex: none; color: var(--muted); font-weight: 400; }
-.fb-item:hover { background: var(--hover); }
-.fb-item.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); color: var(--sel-text); }
-.fb-item.on i, .fb-item.on b { color: var(--sel-text); }
-.fb-item.loading span::after { content: ' …'; }
-.fb-item.off { opacity: .55; }
-.fb-item:focus-visible { outline: 2px solid var(--sel-bar); outline-offset: -1px; }
-.fb-note { margin: 6px 8px; font-size: 11.5px; color: var(--muted); }
-.fb-note.warn { color: var(--warn); }
-#library.dense .lib-files { height: 172px; }
-#library.dense .fb-item { height: 20px; font-size: 12px; }
+.fb-empty p { max-width: 520px; margin: 0 auto; }
+.c-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--side-text); }
+.c-folder.dim { color: var(--muted); }
+.side-item.fd-item.off { opacity: .55; }
+.side-item.fd-item .si-tw { font-size: 11px; }
+.fd-note { margin: 2px 0 4px; padding-left: calc(26px + var(--depth, 0) * 18px); font-size: 11.5px; color: var(--muted); }
+.fd-note.warn { color: var(--warn); }
+#library.dense .fd-note { padding-left: calc(18px + var(--depth, 0) * 14px); font-size: 11px; }
+@media (max-width: 760px) { .fb-add { font-size: 11px; } .fb-status { flex-basis: 100%; order: 5; } }
 /* archivos que no están en la biblioteca: más apagados y con ◌ */
 .row-t.ext > span { opacity: .62; }
 .row-t.ext.sel > span, .row-t.ext.cur > span { opacity: .85; }

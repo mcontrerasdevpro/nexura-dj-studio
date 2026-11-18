@@ -7,7 +7,7 @@ import { SyncManager, SYNC_TICK_MS } from './audio/sync.js';
 import { FxUnit, EFFECTS, BEAT_VALUES } from './audio/fx.js';
 import { Sampler } from './audio/sampler.js';
 import { ExpansionManager } from './audio/expansions.js';
-import { Analyzer } from './analysis/analyzer.js';
+import { Analyzer, needsGrid } from './analysis/analyzer.js';
 import { Library } from './library/library.js';
 import { YouTubeService } from './youtube/youtube.js';
 import { SpotifyService } from './spotify/spotify.js';
@@ -68,8 +68,9 @@ const DEFAULTS = {
   // franjas plegables (fx y rec solo en la vista Biblioteca; el sampler, en las dos)
   panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 },
   // carpeta de grabación ('' = Música › Nexura DJ Studio › Grabaciones), campos del buscador (null = todos) y
-  // última carpeta abierta en el panel «Archivos»
-  recDir: '', searchFields: null, filesDir: ''
+  // última carpeta abierta en el panel «Archivos», con o sin subcarpetas, carpetas favoritas (★) y nodos
+  // desplegados del árbol de carpetas (claves 'fd-root', 'fd:ruta', 'fv:ruta')
+  recDir: '', searchFields: null, filesDir: '', filesRecursive: true, filesFav: [], filesOpen: ['fd-root']
 };
 
 const countTracks = (n) => (n === 1 ? '1 pista' : `${n} pistas`);
@@ -420,8 +421,9 @@ class App extends Emitter {
     this.automixBtn = btn('✨ AUTOMIX', { cls: 'small automix-btn', title: 'La IA pincha sola: elige la siguiente pista (Prepare o sugerencia), sincroniza y mezcla en el outro (F7)', onClick: () => this.automix.toggle() });
     this.automix.on('change', () => this.automixBtn.classList.toggle('on', this.automix.enabled));
     this.autoplayUI = new AutoplayUI(this);
+    this.initFullscreen();
     $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.viewToggle, this.mixerToggle, this.fxToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
-      this.helpBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
+      this.helpBtn, this.fsBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
     $('#wave-zoom').append(
       btn('−', { cls: 'micro', title: 'Alejar la forma de onda (tecla −)', onClick: () => this.zoomWaves(1.25) }),
       btn('+', { cls: 'micro', title: 'Acercar la forma de onda (tecla +)', onClick: () => this.zoomWaves(1 / 1.25) }));
@@ -760,10 +762,14 @@ class App extends Emitter {
     // stems ya separados: se cargan en segundo plano (la pista suena mientras tanto)
     if (t.stems && this.settings.stemsAuto !== false) this.stems.loadForDeck(d).catch(e => console.warn('stems', e));
     let wave = await this.analyzer.getWave(t.id);
-    if (!t.analyzed || !wave) {
+    // beatgrid de una versión anterior del análisis (y BPM no fijado a mano): se recalcula con el audio que ya
+    // está decodificado; mientras tanto la pista suena con el grid de antes
+    const regrid = needsGrid(t);
+    if (!t.analyzed || !wave || regrid) {
       try {
         const meta = await this.analyzer.analyzeTrack(t, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
         this.library.update(t.id, meta);
+        if (regrid && d.track === t) toast(`Beatgrid de «${t.title}» recalculado con el análisis nuevo: ${(+t.bpm).toFixed(2)} BPM`, 'info', 3500);
         this.applyAutoCues(t);
         wave = await this.analyzer.getWave(t.id);
       } catch (e) { console.error(e); toast('Error al analizar: ' + e.message, 'error'); }
@@ -921,11 +927,11 @@ class App extends Emitter {
   }
 
   async analyzeMany(tracks, force = false) {
-    // sin «force»: pistas sin analizar y las analizadas con una versión antigua (sin estructura/energía de la IA);
-    // se respetan el BPM y la tonalidad bloqueados por el usuario
+    // sin «force»: pistas sin analizar y las analizadas con una versión antigua (sin estructura/energía de la IA o
+    // con el beatgrid antiguo); se respetan el BPM y la tonalidad bloqueados por el usuario
     // «Volver a analizar» desbloquea BPM y tonalidad: no se permite con la biblioteca protegida
     if (force && !this.library.guard('grid')) return;
-    const list = tracks.filter(t => t.source === 'local' && (force || !t.analyzed || t.sections === undefined));
+    const list = tracks.filter(t => t.source === 'local' && (force || !t.analyzed || t.sections === undefined || needsGrid(t)));
     if (!list.length) return toast('No hay pistas pendientes de análisis', 'info');
     if (this.analyzing) return toast('Ya hay un análisis en curso', 'warn');
     this.analyzing = true;
@@ -1413,6 +1419,36 @@ class App extends Emitter {
   }
   closeMenus() { if (this._menu) { this._menu.remove(); this._menu = null; } }
 
+  // ------------------------------------------------------------------ pantalla completa
+  // Botón ⛶ junto a los ajustes (para quien no sabe que F11 existe). Escritorio: la ventana (win.setFullScreen por
+  // IPC); navegador: requestFullscreen. Se sincroniza con F11 (el proceso principal avisa) y con Esc.
+  initFullscreen() {
+    const NS = 'http://www.w3.org/2000/svg';
+    this.fsBtn = btn('', { cls: 'small icon fs-btn', onClick: () => this.setFullscreen(!this.fullscreenOn) });
+    this.fsIcon = document.createElementNS(NS, 'svg');
+    for (const [k, v] of Object.entries({ width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) this.fsIcon.setAttribute(k, v);
+    this.fsIcon.appendChild(document.createElementNS(NS, 'path'));
+    this.fsBtn.appendChild(this.fsIcon);
+    this.fullscreenOn = false;
+    this.refreshFullscreen();
+    platform.fullscreen.onChange((v) => { this.fullscreenOn = v; this.refreshFullscreen(); });
+    platform.fullscreen.get().then((v) => { this.fullscreenOn = !!v; this.refreshFullscreen(); }).catch(() => {});
+  }
+  async setFullscreen(on) {
+    try { this.fullscreenOn = !!(await platform.fullscreen.set(!!on)); } catch (_) { /* no se puede */ }
+    this.refreshFullscreen();
+  }
+  refreshFullscreen() {
+    const on = !!this.fullscreenOn, b = this.fsBtn;
+    if (!b) return;
+    // entrar: esquinas hacia fuera · salir: esquinas hacia dentro
+    this.fsIcon.firstChild.setAttribute('d', on ? 'M9 4v5H4 M20 9h-5V4 M15 20v-5h5 M4 15h5v5' : 'M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5');
+    const t = on ? 'Salir de pantalla completa (F11 o Esc)' : 'Pantalla completa (F11)';
+    b.title = t; b.setAttribute('aria-label', t); b.setAttribute('aria-pressed', String(on));
+    b.classList.toggle('on', on);
+    document.body.classList.toggle('is-fullscreen', on);
+  }
+
   // ------------------------------------------------------------------ teclado
   bindKeyboard() {
     const held = new Set();
@@ -1481,6 +1517,12 @@ class App extends Emitter {
         case 'F6': this.engine.setSplit(!this.engine.split); break;
         case 'F8': this.toggleLaptopMode(); break;
         case 'F10': this.toggleScreenView(); break;
+        // Esc: cierra el menú abierto o, si no hay, sale de la pantalla completa (los diálogos ya salen arriba)
+        case 'Escape':
+          if (this._menu) this.closeMenus();
+          else if (this.fullscreenOn) this.setFullscreen(false);
+          else { held.delete(e.code); return; }
+          break;
         case 'F7': if (e.shiftKey) this.autoplay.toggle(); else this.automix.toggle(); break;
         // zoom de la forma de onda (en todos los decks o en el del último deck tocado, según Ajustes)
         case 'Equal': case 'NumpadAdd': this.zoomWaves(1 / 1.25); break;

@@ -242,6 +242,28 @@ export const platform = {
     // árbol de una carpeta con sus subcarpetas, para añadirla (la misma importación que «+ Carpeta»)
     tree(paths) { return N && N.listAudioTree ? N.listAudioTree(paths) : Promise.resolve({ files: [], dirs: [] }); }
   },
+  // Pantalla completa: en el escritorio, la de la ventana (win.setFullScreen, como F11); en el navegador, la del
+  // documento (requestFullscreen). onChange avisa de cualquier cambio (F11, Esc, el botón)
+  fullscreen: {
+    async get() {
+      if (N && N.win) return N.win.isFullscreen();
+      return !!document.fullscreenElement;
+    },
+    async set(on) {
+      if (N && N.win) return N.win.fullscreen(!!on);
+      try {
+        if (on && !document.fullscreenElement) await document.documentElement.requestFullscreen();
+        else if (!on && document.fullscreenElement) await document.exitFullscreen();
+      } catch (_) { /* el navegador no lo permite (sin gesto del usuario o en un iframe) */ }
+      return !!document.fullscreenElement;
+    },
+    onChange(fn) {
+      if (N && N.win) return N.win.onFullscreen(fn);
+      const h = () => fn(!!document.fullscreenElement);
+      document.addEventListener('fullscreenchange', h);
+      return () => document.removeEventListener('fullscreenchange', h);
+    }
+  },
   showItem(p) { if (N) N.showItem(p); },
   openExternal(url) {
     if (N) return N.openExternal(url);
