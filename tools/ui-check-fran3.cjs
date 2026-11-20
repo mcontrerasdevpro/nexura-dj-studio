@@ -30,7 +30,7 @@ const seed = () => {
   for (let i = 0; i < 4; i++) tracks.push(track(`Pop rápido ${i + 1}`, 'Pop', 126));
   return {
     library: { version: 1, tracks, crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] },
-    settings: { welcomeDone: true, libView: 'all', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' }
+    settings: { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, libView: 'all', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' }
   };
 };
 

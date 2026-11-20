@@ -58,7 +58,7 @@ async function key(win, keyCode, modifiers = [], ms = 250) {
 }
 async function open(win, data) {
   // la app guarda biblioteca y ajustes al salir (beforeunload): se desactiva para que no pise los datos de prueba
-  const put = `localStorage.clear(); localStorage.setItem('nexura_library', ${JSON.stringify(JSON.stringify(data.library))}); localStorage.setItem('nexura_settings', ${JSON.stringify(JSON.stringify({ welcomeDone: true, ...data.settings }))});`;
+  const put = `localStorage.clear(); localStorage.setItem('nexura_library', ${JSON.stringify(JSON.stringify(data.library))}); localStorage.setItem('nexura_settings', ${JSON.stringify(JSON.stringify({ welcomeDone: true, screenView: 'mix', viewDefaultV2: true, ...data.settings }))});`;
   await js(win, `${put} if (window.nexuraApp && nexuraApp.library) { nexuraApp.library.save = () => {}; nexuraApp.library.saveSoon = () => {}; window.addEventListener('beforeunload', () => { ${put} }); } true`);
   await load(win);
   await wait(2500);

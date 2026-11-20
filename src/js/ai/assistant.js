@@ -76,7 +76,7 @@ export class Assistant {
   static AUTO_COLOR_OF = { start: 'intro', entry: 'intro', drop: 'drop', break: 'break', outro: 'outro' };
   autoCues(track, { wave = null } = {}) {
     const energy = wave && wave.data ? waveEnergy(wave) : curveEnergy(track);
-    const points = autoCuePoints(track, { energy, onset: wave && wave.data ? waveOnset(wave) : 0 });
+    const points = autoCuePoints(track, { energy, onset: wave && wave.data ? waveOnset(wave) : 0, wave: wave && wave.data ? wave : null });
     const colors = Object.fromEntries(Object.entries(Assistant.AUTO_COLOR_OF).map(([k, v]) => [k, Assistant.AUTO_COLORS[v]]));
     const before = track.cues || Array(8).fill(null);
     const { cues, n } = mergeAutoCues(before, points, colors);

@@ -5,6 +5,27 @@ import { Emitter, clamp, dbToGain } from '../util.js';
 
 // Lo que se espera a que el dispositivo master quede elegido antes de montar la salida con el actual (setOutputs)
 export const SINK_WAIT_MS = 1500;
+// ¿Es el mismo dispositivo de salida? ('' y 'default' son el predeterminado del sistema)
+export const sameDevice = (a, b) => (a && a !== 'default' ? a : '') === (b && b !== 'default' ? b : '');
+// Modo de salida efectivo: «Automático» usa 4 canales solo con una interfaz de 4 (o con nombre de controladora DJ);
+// con más canales (tarjeta 5.1/7.1, auriculares envolventes) sale solo el master en estéreo. «Separados» necesita
+// unos auriculares en otro dispositivo (cueOk)
+export function pickOutputMode(mode, max, { cueOk = false, label = '', controller = '' } = {}) {
+  let eff = mode;
+  if (mode === 'auto') eff = max >= 4 && (max === 4 || looksLikeDjDevice(label, controller)) ? '4ch' : (cueOk ? 'separate' : 'stereo');
+  if (eff === '4ch' && max < 4) eff = cueOk ? 'separate' : 'stereo';
+  if (eff === 'separate' && !cueOk) eff = 'stereo';
+  return eff;
+}
+// ¿Parece la interfaz de audio de una controladora o tarjeta DJ? (para usar sus 4 canales en «Automático»)
+export function looksLikeDjDevice(label, controller) {
+  const l = String(label || '').toLowerCase();
+  if (!l) return false;
+  if (/\bdj\b|controller|controladora/.test(l)) return true;
+  // el nombre de la controladora MIDI conectada (o alguna palabra suya de más de 3 letras) en el del dispositivo
+  const c = String(controller || '').toLowerCase().trim();
+  return !!c && (l.includes(c) || c.split(/[^a-z0-9]+/).some(w => w.length > 3 && l.includes(w)));
+}
 export const XF_CURVES ={ smooth: 'Suave', long: 'Larga', blend: 'Rápida', sharp: 'Corte' };
 
 // Knob de EQ 0..1 → dB (0.5 = 0 dB, 0 = kill, 1 = +6 dB)
@@ -126,12 +147,16 @@ export class AudioEngine extends Emitter {
     this.cueMix = 0.0; this.phonesVol = 0.8; this.split = false;
     this.outputMode = 'stereo';
     this.cueAudioEl = null;
+    this.sideSinks = new Set(); // <audio> abiertos en dispositivos secundarios (auriculares, deck 2 de la mesa externa)
   }
 
   async init(opts = {}) {
     const latencyHint = opts.latency === 'low' ? 0.005 : (opts.latency === 'safe' ? 'playback' : 'interactive');
     this.ctx = new AudioContext({ latencyHint });
     const ctx = this.ctx;
+    // ¿ha llegado a sonar? (antes del primer clic el navegador lo tiene parado: no es un fallo de la salida)
+    this.everRan = ctx.state === 'running';
+    ctx.addEventListener('statechange', () => { if (ctx.state === 'running') this.everRan = true; });
     await ctx.audioWorklet.addModule('js/audio/worklets/deck-processor.js');
     await ctx.audioWorklet.addModule('js/audio/worklets/fx-processors.js');
 
@@ -263,6 +288,17 @@ export class AudioEngine extends Emitter {
     return clamp(faderCurve(ch.values.fader) * g * Math.pow(this.masterVol, 2) * 1.25 * trim, 0, 1);
   }
 
+  // ¿Llega el canal a la salida principal? Fader de canal arriba y crossfader no cerrado en su lado (más de
+  // −30 dB entre los dos). El volumen master no cuenta: bajarlo no saca el deck del aire. Con la mesa externa
+  // los faders son los de la mesa (aquí no se saben): siempre al aire
+  onAir(i) {
+    const ch = this.channels[i];
+    if (!ch) return false;
+    if (this.external) return true;
+    const g = this.xfGains()[ch.values.xfAssign] ?? 1;
+    return faderCurve(ch.values.fader) * g > 0.0316;
+  }
+
   setMasterInserts(units) {
     try { this.masterPre.disconnect(); } catch (_) {}
     for (const u of this.masterInserts) { try { u.output.disconnect(); } catch (_) {} }
@@ -281,15 +317,24 @@ export class AudioEngine extends Emitter {
     };
   }
 
-  async listOutputs() {
+  // ask = false: sin pedir permiso para leer los nombres (al conectar o desconectar dispositivos)
+  async listOutputs(ask = true) {
     try {
       let devs = await navigator.mediaDevices.enumerateDevices();
-      if (devs.some(d => d.kind === 'audiooutput' && !d.label)) {
+      if (ask && devs.some(d => d.kind === 'audiooutput' && !d.label)) {
         try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); } catch (_) {}
         devs = await navigator.mediaDevices.enumerateDevices();
       }
       return devs.filter(d => d.kind === 'audiooutput').map(d => ({ id: d.deviceId, label: d.label || 'Salida ' + d.deviceId.slice(0, 6) }));
     } catch (_) { return []; }
+  }
+
+  // Nombre de un dispositivo de salida ('' = el predeterminado), sin pedir permisos (si no lo da, '')
+  async outputLabel(id) {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput');
+      return (devs.find(d => d.deviceId === (id || 'default')) || devs.find(d => d.deviceId === 'default') || {}).label || '';
+    } catch (_) { return ''; }
   }
 
   // mode: 'auto' | '4ch' | 'separate' | 'stereo' | 'external'
@@ -300,41 +345,68 @@ export class AudioEngine extends Emitter {
   // con el dispositivo actual y, cuando termina, se avisa con «sinkchange» para volver a montarla (sink: false =
   // no volver a pedir el dispositivo). Los <audio> del cue y del deck 2 cambian de dispositivo sin esperar: suenan
   // en cuanto está elegido (así nunca sale el cue por el master).
-  async setOutputs({ mode = 'auto', masterDevice = '', cueDevice = '', sink = true } = {}) {
+  // rc.9:
+  // - Los cambios van en cola (uno detrás de otro): dos montajes a la vez (el del arranque y el del dispositivo
+  //   que tarda, o dos cambios seguidos en Ajustes) podían dejar un <audio> de auriculares huérfano sonando
+  //   además del nuevo: la misma señal dos veces con retardo, como un eco o una reverb.
+  // - Nunca se abre un segundo <audio> en el mismo dispositivo que el master ('' y 'default' son el mismo), ni
+  //   se deja sonar por el predeterminado si no se puede elegir su dispositivo: también sonaría duplicado.
+  // - «Automático» solo usa 4 canales con una interfaz de 4 (las controladoras DJ) o si su nombre es el de la
+  //   controladora: una tarjeta de sonido 5.1/7.1 o unos auriculares con sonido envolvente virtual dicen tener 6-8
+  //   canales y el cue/master de los canales 3/4 salía por el centro/surround, procesado como «sala» (reverb).
+  // - Cambiar de dispositivo con la música sonando: antes se ponen los canales en estéreo (el nuevo puede tener
+  //   menos), después se reanuda el AudioContext si se ha parado y se comprueba que el audio avanza; si no, se
+  //   vuelve a pedir el dispositivo. Los decks no se tocan (siguen en su posición y estado).
+  setOutputs(opts = {}) {
+    const run = () => this._setOutputs(opts);
+    this._outQ = (this._outQ || Promise.resolve()).then(run, run);
+    return this._outQ;
+  }
+  async _setOutputs({ mode = 'auto', masterDevice = '', cueDevice = '', sink = true, masterLabel = '', controller = '' } = {}) {
     const ctx = this.ctx;
     const gen = this.outGen = (this.outGen || 0) + 1;
-    if (ctx.setSinkId && sink) {
-      const want = masterDevice || '';
-      if (!(typeof ctx.sinkId === 'string' && ctx.sinkId === want)) {
-        const t0 = performance.now();
-        const done = ctx.setSinkId(want).then(() => true, (e) => { console.warn('setSinkId', e); return true; });
-        const inTime = await Promise.race([done, new Promise(r => setTimeout(() => r(false), SINK_WAIT_MS))]);
-        if (!inTime) {
-          console.warn(`setSinkId: el dispositivo de salida tarda más de ${SINK_WAIT_MS / 1000} s; se sigue con el actual`);
-          done.then(() => { if (this.outGen === gen) this.emit('sinkchange', Math.round(performance.now() - t0)); });
-        }
-      }
+    let checking = false;
+    this.wantMaster = masterDevice || '';
+    if (ctx.setSinkId && sink && !sameDevice(this.currentSink(), this.wantMaster)) {
+      this.disconnectOutputs(); // canales en estéreo antes de cambiar (el dispositivo nuevo puede tener menos)
+      const t0 = performance.now(), want = this.wantMaster;
+      const done = ctx.setSinkId(want).then(() => true, (e) => { console.warn('setSinkId', e); this.emit('log', 'WARN', `No se pudo elegir el dispositivo de salida: ${(e && e.message) || e}`); return true; });
+      const inTime = await Promise.race([done, new Promise(r => setTimeout(() => r(false), SINK_WAIT_MS))]);
+      if (!inTime) {
+        console.warn(`setSinkId: el dispositivo de salida tarda más de ${SINK_WAIT_MS / 1000} s; se sigue con el actual`);
+        done.then(() => { if (this.outGen === gen) this.emit('sinkchange', Math.round(performance.now() - t0)); });
+      } else if (this.everRan) { checking = true; this.checkRunning(want, gen); } // (antes de iniciar el audio, no)
     }
-    try { this.masterOut.disconnect(ctx.destination); } catch (_) {}
-    if (this.outMerger) { try { this.outMerger.disconnect(); } catch (_) {} try { this.mSplit.disconnect(); this.pSplit.disconnect(); } catch (_) {} this.outMerger = null; }
-    try { this.phOut.disconnect(); } catch (_) {}
-    for (const [src, dst] of this.extLinks || []) { try { src.disconnect(dst); } catch (_) {} }
-    this.extLinks = [];
-    if (this.cueAudioEl) { this.cueAudioEl.pause(); this.cueAudioEl.srcObject = null; this.cueAudioEl = null; }
-    if (this.deck2AudioEl) { this.deck2AudioEl.pause(); this.deck2AudioEl.srcObject = null; this.deck2AudioEl = null; }
-    // <audio> por un segundo dispositivo: suena cuando el dispositivo está elegido (o, si falla, por el predeterminado)
+    this.disconnectOutputs();
+    // <audio> por un segundo dispositivo: suena cuando su dispositivo está elegido; si no se puede elegir, se
+    // queda callado (por el predeterminado sonaría junto al master, con retardo)
     const sideOut = (stream, device, what) => {
       const a = new Audio();
       a.srcObject = stream;
-      const play = () => { if (a.srcObject) a.play().catch(() => {}); };
-      (a.setSinkId ? a.setSinkId(device) : Promise.reject(new Error('setSinkId no disponible'))).then(play, (e) => { console.warn(what, e); play(); });
+      const rec = { el: a, device, what, state: 'abriendo' };
+      this.sideSinks.add(rec);
+      const play = () => { if (a.srcObject) { rec.state = 'abierto'; a.play().catch(() => {}); } };
+      (a.setSinkId ? a.setSinkId(device) : Promise.reject(new Error('setSinkId no disponible'))).then(play, (e) => {
+        console.warn(what, e);
+        rec.state = 'error';
+        this.emit('log', 'WARN', `Salida de ${what}: no se pudo abrir el dispositivo (${(e && e.message) || e}); se queda en silencio para no sonar duplicado por el predeterminado`);
+        this.emit('sinkerror', what);
+      });
       return a;
     };
 
     const max = ctx.destination.maxChannelCount;
-    let eff = mode;
-    if (mode === 'auto') eff = max >= 4 ? '4ch' : (cueDevice ? 'separate' : 'stereo');
-    if (eff === '4ch' && max < 4) eff = cueDevice ? 'separate' : 'stereo';
+    // auriculares en el mismo dispositivo que el master: no hay segunda salida
+    const cueOk = !!cueDevice && !sameDevice(cueDevice, masterDevice);
+    if (cueDevice && !cueOk && (mode === 'separate' || mode === 'auto' || mode === 'external')) this.emit('log', 'WARN', 'El dispositivo de auriculares es el mismo que el master: no se abre una segunda salida (sonaría duplicado con retardo)');
+    let eff = pickOutputMode(mode, max, { cueOk, label: masterLabel, controller });
+    cueDevice = cueOk ? cueDevice : '';
+    // ¿admite el dispositivo esos canales? (si no, al ponerlos fallaba a medio montar y se quedaba en silencio)
+    const fits = (n) => { try { ctx.destination.channelCount = n; return true; } catch (_) { return false; } };
+    if (eff === '4ch' && !fits(4)) { this.emit('log', 'WARN', `El dispositivo dice tener ${max} canales pero no admite 4: salida en estéreo`); eff = cueOk ? 'separate' : 'stereo'; }
+    let maxOk = max;
+    if (eff === 'external') { if (maxOk >= 8 && !fits(8)) maxOk = 4; if (maxOk >= 4 && !fits(4)) maxOk = 2; }
+    fits(2);
     this.setExternal(eff === 'external');
     const link = (src, dst, o, i) => { src.connect(dst, o, i); this.extLinks.push([src, dst]); };
 
@@ -343,7 +415,7 @@ export class AudioEngine extends Emitter {
       const four = this.extDecks === 4;
       const [c1, c2, c3, c4] = this.channels;
       const sideA = four ? [c1, c3] : [c1], sideB = four ? [c2, c4] : [c2];
-      if (four && max >= 8) {
+      if (four && maxOk >= 8) {
         this.extVariant = '8ch';
         ctx.destination.channelCount = 8;
         ctx.destination.channelCountMode = 'explicit';
@@ -355,7 +427,7 @@ export class AudioEngine extends Emitter {
           link(sp, this.outMerger, 0, k * 2); link(sp, this.outMerger, 1, k * 2 + 1);
         });
         this.outMerger.connect(ctx.destination);
-      } else if (max >= 4) {
+      } else if (maxOk >= 4) {
         this.extVariant = four ? '4ch-pares' : '4ch';
         ctx.destination.channelCount = 4;
         ctx.destination.channelCountMode = 'explicit';
@@ -375,7 +447,7 @@ export class AudioEngine extends Emitter {
           sideA.forEach(c => link(c.postFx, ctx.destination)); link(this.samplerBus, ctx.destination);
           const msd = ctx.createMediaStreamDestination();
           sideB.forEach(c => link(c.postFx, msd));
-          this.deck2AudioEl = sideOut(msd.stream, cueDevice, 'deck 2 sink');
+          this.deck2AudioEl = sideOut(msd.stream, cueDevice, 'deck 2');
         } else {
           // Sin 4 canales ni segundo dispositivo: lado A mono por la izquierda y lado B mono por la derecha
           this.extVariant = 'mono';
@@ -408,12 +480,72 @@ export class AudioEngine extends Emitter {
       if (eff === 'separate' && cueDevice) {
         const msd = ctx.createMediaStreamDestination();
         this.phOut.connect(msd);
-        this.cueAudioEl = sideOut(msd.stream, cueDevice, 'cue sink');
+        this.cueAudioEl = sideOut(msd.stream, cueDevice, 'auriculares');
       }
     }
     this.outputMode = eff;
     this.emit('outputs', { mode: eff, maxChannels: max, variant: this.extVariant });
+    // audio parado por un cambio anterior cuya comprobación se ha abandonado: se comprueba con este montaje
+    if (!checking && this.everRan && ctx.state !== 'running') this.checkRunning(this.wantMaster, gen);
     return eff;
+  }
+
+  // Dispositivo actual del AudioContext ('' = el predeterminado del sistema)
+  currentSink() { const s = this.ctx && this.ctx.sinkId; return typeof s === 'string' ? s : ''; }
+  // Quita todas las conexiones a las salidas y cierra los <audio> de los dispositivos secundarios (todos los que se
+  // hayan abierto, no solo los últimos: así no queda ninguno huérfano sonando). Canales del destino en estéreo
+  disconnectOutputs() {
+    const ctx = this.ctx;
+    try { this.masterOut.disconnect(ctx.destination); } catch (_) {}
+    if (this.mSplit) { try { this.masterOut.disconnect(this.mSplit); } catch (_) {} }
+    if (this.outMerger) { try { this.outMerger.disconnect(); } catch (_) {} try { this.mSplit.disconnect(); this.pSplit.disconnect(); } catch (_) {} this.outMerger = null; }
+    this.mSplit = this.pSplit = null;
+    try { this.phOut.disconnect(); } catch (_) {}
+    for (const [src, dst] of this.extLinks || []) { try { src.disconnect(dst); } catch (_) {} }
+    this.extLinks = [];
+    if (!this.sideSinks) this.sideSinks = new Set();
+    for (const s of this.sideSinks) { try { s.el.pause(); s.el.srcObject = null; } catch (_) {} }
+    this.sideSinks.clear();
+    this.cueAudioEl = this.deck2AudioEl = null;
+    try { ctx.destination.channelCount = 2; ctx.destination.channelCountMode = 'explicit'; ctx.destination.channelInterpretation = 'speakers'; } catch (_) {}
+  }
+  // Tras cambiar de dispositivo: el AudioContext tiene que seguir en marcha y su reloj avanzar. Si se ha parado se
+  // reanuda; si a los 400 ms el audio sigue sin avanzar, se pide otra vez el dispositivo (una vez)
+  // gen: montaje de salidas que la pidió; si mientras tanto se ha pedido otro, esta comprobación se abandona (no
+  // vuelve a pedir un dispositivo que ya no es el elegido)
+  async checkRunning(want, gen = this.outGen, retry = true) {
+    const ctx = this.ctx, stale = () => this.outGen !== gen;
+    if (ctx.state !== 'running') { try { await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 800))]); } catch (_) {} }
+    if (stale()) return null;
+    const t0 = ctx.currentTime;
+    await new Promise(r => setTimeout(r, 400));
+    if (stale()) return null;
+    const ok = ctx.state === 'running' && ctx.currentTime > t0 + 0.05;
+    this.emit('log', ok ? 'INFO' : 'WARN', `Dispositivo de salida ${want ? 'elegido' : 'predeterminado'}: audio ${ok ? 'en marcha' : `parado (estado ${ctx.state})`}`);
+    if (!ok && retry && ctx.setSinkId) {
+      try { await ctx.setSinkId(want); await ctx.resume(); } catch (e) { this.emit('log', 'WARN', 'Reintento del dispositivo de salida: ' + ((e && e.message) || e)); }
+      return this.checkRunning(want, gen, false);
+    }
+    if (!ok) this.emit('stalled');
+    return ok;
+  }
+  // Dispositivos conectados o desconectados (devicechange): si se ha ido el dispositivo master elegido, se sigue
+  // por el predeterminado; si vuelve, se vuelve a él. outs = [{ id, label }] (listOutputs)
+  async onDevicesChanged(outs) {
+    const want = this.wantMaster || '';
+    if (!want || !this.ctx.setSinkId) return null;
+    const there = outs.some(o => o.id === want);
+    const cur = this.currentSink();
+    if (!there && sameDevice(cur, want)) { this.lostMaster = true; this.emit('device', 'lost'); return 'lost'; }
+    if (there && this.lostMaster) { this.lostMaster = false; this.emit('device', 'back'); return 'back'; }
+    return null;
+  }
+  // Para el registro técnico: qué salidas hay abiertas ahora
+  sinkReport() {
+    const dev = (id) => (!id || id === 'default' ? 'predeterminado' : 'dispositivo ' + String(id).slice(0, 8));
+    const parts = [`AudioContext → ${dev(this.currentSink())} (${this.ctx.destination.channelCount} de ${this.ctx.destination.maxChannelCount} canales, modo ${this.outputMode}${this.extVariant && this.outputMode === 'external' ? ' · ' + this.extVariant : ''}, ${this.ctx.state})`];
+    for (const s of this.sideSinks || []) parts.push(`<audio> ${s.what} → ${dev(s.device)} (${s.state})`);
+    return parts.join(' · ');
   }
 
   setExternal(on) {

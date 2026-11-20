@@ -1598,3 +1598,66 @@ body.view-lib .lib-quick { display: inline-flex; gap: 3px; flex: none; }
 .rec-where.warn, .set-path.warn { color: var(--warn); }
 .set-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .set-path { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font: 11.5px var(--mono); color: var(--muted); }
+
+/* 18. rc.9: aviso de carga, edición de grid, pitch bend y pestañas de los pads -------------------------- */
+/* carga bloqueada sobre un deck que suena al aire: encima de la onda del deck, bien visible */
+.load-guard { position: absolute; z-index: 30; top: 44px; left: 50%; transform: translateX(-50%); width: min(420px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--panel3); border: 1px solid var(--warn); border-left: 4px solid var(--warn); border-radius: 6px; box-shadow: 0 12px 34px rgba(0, 0, 0, .6); font-size: 13px; color: var(--text); }
+.load-guard b { color: #ffd28a; font-size: 14px; }
+.load-guard small { color: var(--muted); font-size: 11.5px; }
+.load-guard .lg-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.load-guard .lg-close { margin-left: auto; }
+/* pitch bend: botones grandes con su rótulo, junto al pitch (vista Mezcla) o al final de CUE/PLAY/SYNC (vista Biblioteca) */
+.bend-box { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.bend-lbl { font-size: 8.5px; font-weight: 800; letter-spacing: .1em; color: var(--muted); }
+.bend-pair { display: flex; gap: 2px; }
+.btn.bend-btn { width: 23px; height: 26px; padding: 0; font: 700 15px var(--mono); line-height: 1; touch-action: none; user-select: none; -webkit-user-select: none; }
+.btn.bend-btn.pressed { background: color-mix(in srgb, var(--dc) 38%, var(--panel3)); border-color: var(--dc); color: #fff; }
+.transport .bend-lib { display: none; }
+html body.view-lib .deck .transport .bend-lib { display: flex; flex: none; flex-direction: row; gap: 3px; align-items: center; }
+html body.view-lib .deck .transport .bend-lib .bend-lbl { font-size: 8px; }
+html body.view-lib .deck .transport .btn.bend-btn { flex: none; width: 24px; height: 28px; font-size: 14px; }
+@media (max-height: 820px) { html body.view-lib .deck .transport .btn.bend-btn { height: 26px; } }
+
+/* editar grid: botón con texto, filas del modo y, en la vista Biblioteca, botón junto al BPM */
+.btn.grid-edit-btn.on, .btn.grid-head-btn.on { background: color-mix(in srgb, var(--warn) 30%, var(--panel3)); border-color: var(--warn); color: #fff; }
+.row.grid-edit { flex-wrap: wrap; row-gap: 3px; padding: 3px 4px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.row.grid-edit.hidden { display: none; }
+.row.grid-edit .btn { padding: 3px 5px; min-width: 0; }
+.row.grid-edit .micro { font: 10px var(--mono); }
+.row.grid-edit .ge-tag { color: var(--warn); font-weight: 800; }
+.row.grid-edit .grid-bpm { min-width: 46px; text-align: center; cursor: pointer; font: 700 11.5px var(--mono); color: #fff; }
+.grid-head-btn { display: none; }
+html body.view-lib .deck .grid-head-btn { display: inline-block; padding: 1px 5px; font-size: 9.5px; }
+/* vista Biblioteca: el modo ocupa el sitio de las pestañas, los pads y los loops rápidos (lo esencial: BPM, TAP,
+   ◂ ▸, 1 aquí, beat aquí, deshacer, análisis y terminar; las marcas de BPM variable, en la vista Mezcla) */
+html body.view-lib .deck.grid-editing .row.grid-edit:not(.hidden) { display: flex; align-self: start; gap: 2px; padding: 2px 3px; }
+html body.view-lib .deck.grid-editing .row.grid-edit:not(.grid-here) { grid-area: tabs / tabs / pads / pads; }
+html body.view-lib .deck.grid-editing .row.grid-here { grid-area: loops; }
+html body.view-lib .deck.grid-editing .pad-tabs, html body.view-lib .deck.grid-editing .pads, html body.view-lib .deck.grid-editing .qloops { display: none; }
+html body.view-lib .deck .row.grid-edit .lbl, html body.view-lib .deck .row.grid-edit .sep, html body.view-lib .deck .row.grid-here .ge-adv { display: none; }
+html body.view-lib .deck .row.grid-edit .btn { padding: 1px 4px; height: 20px; font-size: 10px; }
+html body.view-lib .deck .row.grid-edit .grid-bpm { min-width: 40px; font-size: 11px; }
+
+/* pestañas de los modos de pad: nombre completo; si no caben en una fila, dos filas de 5; si tampoco, el corto */
+.pad-tabs { container-type: inline-size; flex-wrap: wrap; }
+.pad-tab { flex: 1 1 auto; text-overflow: clip; }
+.pad-tab .pt-short { display: none; }
+@container (max-width: 470px) {
+  .pad-tab { flex: 1 1 calc(20% - 2px); max-width: calc(20% - 1.6px); }
+}
+@container (max-width: 300px) {
+  .pad-tab .pt-full { display: none; }
+  .pad-tab .pt-short { display: inline; }
+}
+html body.view-lib .deck .pad-tab { flex: 1 1 auto; padding: 2px 3px; }
+@container (max-width: 470px) { html body.view-lib .deck .pad-tab { flex: 1 1 calc(20% - 2px); } }
+html body.view-lib .deck .bend-mix { display: none; }
+@container (max-width: 300px) { .pad-tab, html body.view-lib .deck .pad-tab { padding-inline: 1px; } }
+/* alto ≤ 820: pestañas en dos filas y BEND compactos (que el deck no crezca y la biblioteca no baje) */
+@media (max-height: 820px) {
+  .pad-tab { padding: 1px 2px; line-height: 12px; font-size: 9px; }
+  .pad-tabs { row-gap: 2px; }
+  .bend-box { gap: 1px; }
+  .bend-lbl { font-size: 7.5px; line-height: 9px; }
+  .btn.bend-btn { height: 20px; font-size: 13px; }
+}

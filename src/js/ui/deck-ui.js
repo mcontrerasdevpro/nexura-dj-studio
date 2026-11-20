@@ -12,6 +12,9 @@ import { peakToMeter } from '../audio/engine.js';
 const setText = (node, s) => { if (node._t !== s) { node._t = s; node.textContent = s; } };
 // tamaños de los loops rápidos de la vista Biblioteca (en beats)
 const QUICK_LOOPS = [1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
+export const Q_TITLE = 'Cuantización (Q, para todos los decks). Con Q, los loops y saltos van al beat y los cues se pegan al golpe más cercano si está a menos de 30 ms de una línea del grid (si no, a la línea). Mayús o Alt al poner el cue: justo donde está, sin cuantizar';
+// nombres cortos de los modos de pad cuando no cabe el completo (el completo va siempre en el título)
+const PAD_SHORT = { hotcue: 'Hot Cue', cueloop: 'Cue Loop', savedloop: 'Saved', roll: 'Roll', slicer: 'Slicer', beatjump: 'Jump', sampler: 'Sampler', pitchplay: 'Pitch', stems: 'Stems' };
 
 export class DeckUI {
   constructor(app, deck, root) {
@@ -23,6 +26,7 @@ export class DeckUI {
     // último deck tocado: el zoom independiente de los botones y del teclado se aplica a ese deck
     root.addEventListener('pointerdown', () => { app.lastDeckTouched = deck.idx; }, true);
     app.on('settings', () => this.refresh('state'));
+    app.on('loadGuard', (g) => { if (g.idx === deck.idx) this.showLoadGuard(g); });
     app.on('expansions', () => this.refresh('state'));
     app.sampler.on('voices', () => this.refreshPads());
     app.sampler.on('change', () => this.refreshPads());
@@ -54,6 +58,8 @@ export class DeckUI {
       el('div', { class: 'deck-num' }, String(n)), this.layerTabs,
       el('div', { class: 'deck-meta' }, this.title, el('div', { class: 'd-sub' }, this.ytBadge, this.artist)),
       el('div', { class: 'deck-stats' },
+        // vista Biblioteca (sin fila GRID): botón para editar el grid junto al BPM
+        this.gridHeadBtn = btn('✎ GRID', { cls: 'micro grid-head-btn', title: 'Editar grid: arrastra la rejilla sobre la onda y ajústala con precisión', onClick: () => d.toggleGridEdit() }),
         this.keyEl,
         el('div', { class: 'd-bpmbox' }, this.bpmEl, this.tempoEl, this.phaseMeter)));
 
@@ -68,7 +74,7 @@ export class DeckUI {
     const platWrap = el('div', { class: 'platter-wrap' }, this.platter, this.ytBox);
     this.bindPlatter();
 
-    this.cueBtn = btn('CUE', { cls: 'big cue', onDown: () => d.cueDown(), onUp: () => d.cueUp(), title: 'Cue (Mayús+clic: ir al inicio)' });
+    this.cueBtn = btn('CUE', { cls: 'big cue', onDown: (e) => d.cueDown(e.shiftKey || e.altKey), onUp: () => d.cueUp(), title: 'Cue. En pausa fuera del cue, lo pone aquí (con Q, en el golpe o en la línea del grid; Mayús o Alt + clic: justo aquí, sin cuantizar)' });
     this.playBtn = btn('▶︎❚❚', { cls: 'big play', onDown: (e) => (e.shiftKey ? d.stutter() : d.togglePlay()), title: 'Play / Pausa (Mayús: stutter)' });
     
     const platCol = el('div', { class: 'platter-col' }, platWrap);
@@ -81,8 +87,9 @@ export class DeckUI {
     this.slipBtn = btn('SLIP', { cls: 'small', onClick: () => d.toggleSlip() });
     this.vinylBtn = btn('VINYL', { cls: 'small', onClick: () => d.toggleVinyl(), title: 'Plato en modo vinilo (scratch) o nudge' });
     this.censorBtn = btn('CENSOR', { cls: 'small', onDown: () => d.censor(true), onUp: () => d.censor(false), title: 'Reproduce al revés mientras se mantiene' });
-    this.qBtn = btn('Q', { cls: 'small q', onClick: () => app.setSetting('quantize', !app.settings.quantize), title: 'Cuantización (global)' });
-    const transport = el('div', { class: 'transport' }, this.cueBtn, this.playBtn, this.syncBtn);
+    this.qBtn = btn('Q', { cls: 'small q', onClick: () => app.setSetting('quantize', !app.settings.quantize), title: Q_TITLE });
+    // en la vista Biblioteca la columna del pitch es estrecha: el BEND va al final de la fila CUE / PLAY / SYNC
+    const transport = el('div', { class: 'transport' }, this.cueBtn, this.playBtn, this.syncBtn, this.bendBox('bend-lib'));
     platCol.appendChild(transport);
     const perfRow = el('div', { class: 'row perf' }, this.masterEl, this.keylockBtn, this.slipBtn, this.vinylBtn, this.censorBtn, this.qBtn);
 
@@ -102,7 +109,9 @@ export class DeckUI {
 
     this.tabs = el('div', { class: 'pad-tabs' });
     for (const m of PAD_MODES) {
-      const t = el('button', { class: 'pad-tab', dataset: { mode: m } }, PAD_MODE_NAMES[m]);
+      // nombre completo y, si la pestaña no da para él (ventana estrecha, vista Biblioteca), el corto (CSS)
+      const t = el('button', { class: 'pad-tab', dataset: { mode: m }, title: 'Modo de pads: ' + PAD_MODE_NAMES[m] },
+        el('span', { class: 'pt-full' }, PAD_MODE_NAMES[m]), el('span', { class: 'pt-short' }, PAD_SHORT[m]));
       t.addEventListener('click', () => d.setPadMode(m));
       this.tabs.appendChild(t);
     }
@@ -110,6 +119,7 @@ export class DeckUI {
     this.pads = [];
     for (let i = 0; i < 8; i++) {
       const p = el('div', { class: 'pad' }, el('span', { class: 'pad-label' }, String(i + 1)));
+      // Mayús/Alt + pad: en un pad con cue lo borra; en uno vacío pone el cue sin cuantizar
       p.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; e.preventDefault(); p.setPointerCapture(e.pointerId); d.padDown(i, e.shiftKey || e.altKey); });
       const up = () => d.padUp(i);
       p.addEventListener('pointerup', up);
@@ -148,48 +158,52 @@ export class DeckUI {
       btn('0', { cls: 'tiny', onClick: () => d.keyReset(), title: 'Tonalidad original' }),
       btn('SYNC', { cls: 'small', onClick: () => d.keySync(), title: 'Ajustar tonalidad a la del otro deck' }));
 
+    // ◂ ▸ del grid: 1 ms; Mayús 10 ms; Ctrl medio beat
+    const shiftStep = (e) => (e && (e.ctrlKey || e.metaKey) ? 'half' : e && e.shiftKey ? 10 : 1);
+    const SHIFT_TITLE = '(1 ms; Mayús: 10 ms; Ctrl: medio beat)';
     const gridRow = el('div', { class: 'row grid' },
       el('span', { class: 'lbl' }, 'GRID'),
-      btn('TAP', { cls: 'small', onClick: () => d.tap(), title: 'Tap tempo (4 pulsaciones)' }),
-      btn('×2', { cls: 'tiny', onClick: () => d.bpmScale(2) }),
-      btn('½', { cls: 'tiny', onClick: () => d.bpmScale(0.5) }),
-      btn('◂', { cls: 'tiny', onClick: () => d.gridShift(-5), title: 'Desplazar grid −5 ms' }),
-      btn('▸', { cls: 'tiny', onClick: () => d.gridShift(5), title: 'Desplazar grid +5 ms' }),
-      btn('1 AQUÍ', { cls: 'small', onClick: () => d.downbeatHere(), title: 'Compás aquí: el primer tiempo de compás cae en la posición actual' }),
-      this.gridEditBtn = btn('✎', { cls: 'tiny', title: 'Editor de beatgrid (marcas y BPM variable)', onClick: () => { this.gridEdit = !this.gridEdit; this.refresh('grid'); } }),
+      btn('TAP', { cls: 'small', onClick: () => d.tap(), title: 'Tap tempo: pulsa al ritmo (4 pulsaciones o más)' }),
+      btn('×2', { cls: 'tiny', onClick: () => d.bpmScale(2), title: 'BPM × 2' }),
+      btn('½', { cls: 'tiny', onClick: () => d.bpmScale(0.5), title: 'BPM ÷ 2' }),
+      btn('◂', { cls: 'tiny', onClick: (e) => d.gridNudge(-1, shiftStep(e)), title: 'Mover el grid a la izquierda ' + SHIFT_TITLE }),
+      btn('▸', { cls: 'tiny', onClick: (e) => d.gridNudge(1, shiftStep(e)), title: 'Mover el grid a la derecha ' + SHIFT_TITLE }),
+      btn('1 AQUÍ', { cls: 'small', onClick: () => d.downbeatHere(), title: '1 aquí: el beat 1 del compás cae en la posición que suena (el cabezal)' }),
+      this.gridEditBtn = btn('✎ EDITAR', { cls: 'small grid-edit-btn', title: 'Editar grid: arrastra la rejilla sobre la onda y ajústala con precisión (también clic derecho en la onda)', onClick: () => d.toggleGridEdit() }),
       el('span', { class: 'sep' }),
       btn('EJECT', { cls: 'small', onClick: () => d.eject() }));
 
-    // editor de beatgrid: marcas en la posición del cabezal y BPM del tramo actual
-    this.gridBpmEl = el('span', { class: 'val grid-bpm', title: 'BPM del tramo actual (clic para escribirlo)' }, '—');
+    // modo de edición del grid: BPM y desplazamiento finos, «1 aquí», marcas, deshacer y volver al análisis
+    this.gridBpmEl = el('span', { class: 'val grid-bpm', title: 'BPM del grid (del tramo actual con BPM variable). Clic para escribirlo' }, '—');
     this.gridBpmEl.addEventListener('click', async () => {
       if (!d.bpm) return;
-      const v = await app.prompt('BPM exacto del tramo actual', d.bpm.toFixed(3));
+      const v = await app.prompt('BPM exacto del grid', d.bpm.toFixed(3));
       const n = parseFloat(String(v || '').replace(',', '.'));
       if (n > 20 && n < 300) d.setBpm(n);
     });
     this.gridCount = el('span', { class: 'lbl grid-count' }, '');
+    const bpmBtn = (label, v) => btn(label, { cls: 'micro', title: `${v > 0 ? '+' : '−'}${String(Math.abs(v)).replace('.', ',')} BPM`, onClick: () => d.bpmNudge(v) });
     this.gridEditRow = el('div', { class: 'row grid-edit hidden' },
-      el('span', { class: 'lbl' }, 'MARCAS'),
-      btn('+', { cls: 'tiny', title: 'Añadir marca de grid aquí: coloca el cabezal sobre el golpe (pausa y ajusta con el plato) y pulsa', onClick: () => d.addGridMarker() }),
-      btn('−', { cls: 'tiny', title: 'Quitar la marca más cercana', onClick: () => d.removeGridMarker() }),
-      this.gridCount,
-      el('span', { class: 'sep' }),
+      el('span', { class: 'lbl ge-tag' }, 'EDITAR GRID'),
       el('span', { class: 'lbl' }, 'BPM'),
-      btn('−', { cls: 'micro', title: '−0,01 BPM en el tramo actual', onClick: () => d.bpmNudge(-0.01) }),
-      this.gridBpmEl,
-      btn('+', { cls: 'micro', title: '+0,01 BPM en el tramo actual', onClick: () => d.bpmNudge(0.01) }),
-      btn('FIJO', { cls: 'small', title: 'Quitar todas las marcas (BPM fijo)', onClick: () => d.clearGridMarkers() }));
+      bpmBtn('−.1', -0.1), bpmBtn('−.01', -0.01), this.gridBpmEl, bpmBtn('+.01', 0.01), bpmBtn('+.1', 0.1),
+      btn('TAP', { cls: 'small', onClick: () => d.tap(), title: 'Tap tempo: pulsa al ritmo (4 pulsaciones o más)' }),
+      el('span', { class: 'sep' }),
+      btn('◂', { cls: 'tiny', onClick: (e) => d.gridNudge(-1, shiftStep(e)), title: 'Mover el grid a la izquierda ' + SHIFT_TITLE }),
+      btn('▸', { cls: 'tiny', onClick: (e) => d.gridNudge(1, shiftStep(e)), title: 'Mover el grid a la derecha ' + SHIFT_TITLE }));
     // edición en la posición del cabezal (pausa y coloca el cabezal sobre el golpe)
     this.gridUndoBtn = btn('↶', { cls: 'tiny', title: 'Deshacer el último cambio del grid', onClick: () => d.undoGrid() });
+    this.gridResetBtn = btn('ANÁLISIS', { cls: 'small', title: 'Volver al análisis: deja el grid como lo calculó la app (deshace todos tus cambios del grid de esta pista)', onClick: () => app.restoreAnalysisGrid(d) });
     this.gridHereRow = el('div', { class: 'row grid-edit grid-here hidden' },
-      el('span', { class: 'lbl' }, 'AQUÍ'),
-      btn('INICIO', { cls: 'small', title: 'Inicio del grid aquí: el primer beat pasa a la posición actual', onClick: () => d.editGrid('start') }),
+      btn('1 AQUÍ', { cls: 'small primary', title: '1 aquí: el beat 1 del compás cae en la posición que suena (el cabezal)', onClick: () => d.downbeatHere() }),
       btn('BEAT', { cls: 'small', title: 'Beat aquí: el beat más cercano cae en la posición actual y se reajusta el BPM del tramo', onClick: () => d.editGrid('beat') }),
-      btn('COMPÁS', { cls: 'small', title: 'Compás aquí: la posición actual pasa a ser el primer tiempo de un compás', onClick: () => d.downbeatHere() }),
-      btn('BPM…', { cls: 'small', title: 'Cambio de BPM aquí (en el compás o beat más cercano)', onClick: () => this.tempoChangeDialog() }),
+      btn('BPM…', { cls: 'small ge-adv', title: 'Cambio de BPM aquí (en el compás o beat más cercano), para temas con tempo variable', onClick: () => this.tempoChangeDialog() }),
+      btn('+M', { cls: 'tiny ge-adv', title: 'Añadir marca de grid aquí (BPM variable): coloca el cabezal sobre el golpe y pulsa', onClick: () => d.addGridMarker() }),
+      btn('−M', { cls: 'tiny ge-adv', title: 'Quitar la marca de grid más cercana', onClick: () => d.removeGridMarker() }),
+      this.gridCount,
       el('span', { class: 'sep' }),
-      this.gridUndoBtn);
+      this.gridUndoBtn, this.gridResetBtn,
+      btn('✓', { cls: 'tiny ge-done', title: 'Terminar de editar el grid', onClick: () => d.toggleGridEdit(false) }));
 
     // loops rápidos (vista Biblioteca): un botón por tamaño; el mismo otra vez sale del loop
     this.qloopBtns = QUICK_LOOPS.map(b => btn(fmtBeats(b), { cls: 'micro qloop', title: `Auto loop de ${fmtBeats(b)} beat${b > 1 ? 's' : ''}`, onClick: () => d.autoLoop(b) }));
@@ -226,9 +240,7 @@ export class DeckUI {
     this.pitchPct = el('div', { class: 'pitch-pct' }, '0.00%');
     const pitchCol = el('div', { class: 'pitch-col' },
       this.rangeBtn, this.pitchFader.el, this.pitchPct,
-      el('div', { class: 'bend' },
-        btn('−', { cls: 'tiny', onDown: (e) => d.bendDown(-1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend − (mantener: frena un poco y, si sigues, más; Mayús: más fuerte)' }),
-        btn('+', { cls: 'tiny', onDown: (e) => d.bendDown(1, e.shiftKey), onUp: () => d.bendUp(), title: 'Pitch bend + (mantener: acelera un poco y, si sigues, más; Mayús: más fuerte)' })),
+      this.bendBox('bend-mix'),
       // pitch fino: el fader en pantalla mueve ~0,1 BPM por píxel (±8 %); para cuadrar a mano hace falta 0,01
       el('div', { class: 'bend pitch-fine', title: 'Pitch fino: ±0,01 BPM' },
         btn('−.01', { cls: 'micro', onClick: () => d.pitchFine(-PITCH_FINE), title: 'Pitch fino: −0,01 BPM' }),
@@ -254,6 +266,25 @@ export class DeckUI {
         if (added[0]) app.loadToDeck(added[0].id, d.idx);
       }
     });
+  }
+
+  // Aviso de carga bloqueada (deck que suena al aire): encima del deck, con «Cargar igualmente». Se quita solo a
+  // los 6 s, al forzar la carga o con ✕. g.id = null → quitarlo (la carga se ha hecho de otra forma)
+  showLoadGuard(g) {
+    clearTimeout(this._guardT);
+    if (this.guardEl) { this.guardEl.remove(); this.guardEl = null; }
+    if (!g.id) return;
+    const n = this.deck.idx + 1, close = () => { clearTimeout(this._guardT); if (this.guardEl) { this.guardEl.remove(); this.guardEl = null; } };
+    const force = btn('Cargar igualmente', { cls: 'small primary lg-force', onClick: () => { close(); g.force(); } });
+    const x = btn('✕', { cls: 'micro lg-close', title: 'Cerrar el aviso', onClick: close });
+    x.setAttribute('aria-label', 'Cerrar el aviso');
+    this.guardEl = el('div', { class: 'load-guard', role: 'alert' },
+      el('b', {}, `El deck ${n} está sonando al aire.`),
+      el('span', {}, 'Para cargar, pausa el deck o baja su fader.'),
+      el('small', {}, 'O vuelve a cargar antes de 2 s.'),
+      el('div', { class: 'lg-actions' }, force, x));
+    this.root.appendChild(this.guardEl);
+    this._guardT = setTimeout(close, 6000);
   }
 
   bindPlatter() {
@@ -402,15 +433,35 @@ export class DeckUI {
   }
 
   refreshGrid() {
-    const d = this.deck, ok = !!(d.track && !d.isYT);
-    this.gridEditRow.classList.toggle('hidden', !(this.gridEdit && ok));
-    this.gridHereRow.classList.toggle('hidden', !(this.gridEdit && ok));
-    this.gridEditBtn.classList.toggle('on', !!this.gridEdit);
-    if (!this.gridEdit || !ok) return;
+    const d = this.deck, ok = !!(d.track && !d.isYT), on = !!(d.gridEditing && ok);
+    this.gridEditRow.classList.toggle('hidden', !on);
+    this.gridHereRow.classList.toggle('hidden', !on);
+    this.root.classList.toggle('grid-editing', on);
+    this.gridEditBtn.classList.toggle('on', on);
+    this.gridHeadBtn.classList.toggle('on', on);
+    this.gridHeadBtn.hidden = !ok;
+    if (!on) return;
     this.gridUndoBtn.disabled = !d.canUndoGrid();
-    const n = d.hasGridMarkers ? d.track.grid.length : (d.bpm ? 1 : 0);
-    this.gridCount.textContent = n > 1 ? `${n} · tramo ${Math.max(1, d.track.grid.filter(m => m.t <= d.time + 1e-3).length)}` : (n ? 'fijo' : '—');
+    this.gridResetBtn.disabled = !d.track.bpmLocked;
+    const n = d.hasGridMarkers ? d.track.grid.length : 0;
+    this.gridCount.textContent = n > 1 ? `${n} marcas · tramo ${Math.max(1, d.track.grid.filter(m => m.t <= d.time + 1e-3).length)}` : '';
     this.gridBpmEl.textContent = d.bpm ? d.bpm.toFixed(2) : '—';
+  }
+
+  // Botones de pitch bend como en los reproductores de CD: mientras se mantienen, el tema frena (−) o acelera (+)
+  // de forma progresiva (±1 % → ±4 % en 1,5 s; Mayús: más fuerte); al soltar vuelve a su tempo. Ratón y táctil
+  bendBox(cls) {
+    const d = this.deck;
+    const mk = (dir) => {
+      const b = btn(dir < 0 ? '−' : '+', { cls: 'bend-btn ' + (dir < 0 ? 'bend-minus' : 'bend-plus'), onDown: (e) => d.bendDown(dir, e.shiftKey), onUp: () => d.bendUp(),
+        title: dir < 0 ? 'Pitch bend −: mantén pulsado para frenar el tema (suave al principio y más si sigues; Mayús: más fuerte). Al soltar vuelve a su tempo. Teclas A (deck 1) y K (deck 2)'
+          : 'Pitch bend +: mantén pulsado para acelerar el tema (suave al principio y más si sigues; Mayús: más fuerte). Al soltar vuelve a su tempo. Teclas S (deck 1) y L (deck 2)' });
+      b.setAttribute('aria-label', dir < 0 ? 'Pitch bend menos' : 'Pitch bend más');
+      // en pantallas táctiles, mantener pulsado no abre el menú contextual
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+      return b;
+    };
+    return el('div', { class: 'bend-box ' + cls }, el('span', { class: 'bend-lbl' }, 'BEND'), el('div', { class: 'bend-pair' }, mk(-1), mk(1)));
   }
 
   refreshStems() {
@@ -435,7 +486,7 @@ export class DeckUI {
     const d = this.deck, t = d.track;
     const time = d.time;
     setText(this.elapsed, fmtTime(time));
-    if (this.gridEdit && d.hasGridMarkers && (this._gf = (this._gf || 0) + 1) % 6 === 0) this.refreshGrid();
+    if (d.gridEditing && d.hasGridMarkers && (this._gf = (this._gf || 0) + 1) % 6 === 0) this.refreshGrid();
     // vídeo de YouTube cuya duración aún no ha dado el reproductor: «--:--» en vez de un 0 engañoso
     setText(this.remain, t && !d.duration ? '--:--.-' : '-' + fmtTime(Math.max(0, d.duration - time)));
     this.remain.classList.toggle('warn', d.playing && d.duration > 0 && d.duration - time < 30);

@@ -79,7 +79,7 @@ export class Analyzer {
       energy: r.energy, sections: r.sections || [], energyCurve: r.energyCurve || null, energyV: r.energyV || null
     };
     if (!track.bpmLocked) {
-      meta.bpm = r.bpm; meta.firstBeat = r.firstBeat; meta.grid = null; meta.gridV = GRID_VERSION;
+      meta.bpm = r.bpm; meta.firstBeat = r.firstBeat; meta.grid = null; meta.gridV = GRID_VERSION; meta.gridAuto = null;
       // tempo variable detectado: beatgrid con marcas (BPM dominante para la biblioteca)
       if (r.grid && r.grid.length > 1) Object.assign(meta, gridUpdate(r.grid, duration), { bpmLocked: false });
     }

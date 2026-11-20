@@ -54,7 +54,7 @@ export class Automix extends Emitter {
   }
   async startWith(track) {
     const idx = (this.decks.find(d => !d.track) || this.decks.find(d => !d.playing) || this.decks[0]).idx;
-    await this.app.loadToDeck(track.id, idx);
+    await this.app.loadToDeck(track.id, idx, { auto: true });
     const d = this.app.decks[idx];
     if (d.track !== track) return;
     this.app.engine.channels[idx].set('fader', 1);
@@ -123,7 +123,7 @@ export class Automix extends Emitter {
       try {
         const pick = await this.nextTrack(cur);
         if (!pick) { this.lastError = 'sin pistas'; this.app.toast('Automix: no quedan pistas compatibles. Añade pistas a Prepare.', 'warn'); this.toggle(false); return; }
-        await this.app.loadToDeck(pick.track.id, nxt.idx);
+        await this.app.loadToDeck(pick.track.id, nxt.idx, { auto: true });
         if (nxt.track === pick.track) {
           nxt.seek(this.mixIn(pick.track));
           this.app.engine.channels[nxt.idx].set('fader', 0);

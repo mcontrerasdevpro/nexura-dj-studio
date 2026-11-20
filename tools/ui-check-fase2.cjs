@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
     const tag = `${w}x${h}`;
     await load(win);
     const data = seed();
-    await js(win, `localStorage.clear(); localStorage.setItem('nexura_library', ${JSON.stringify(JSON.stringify(data.library))}); localStorage.setItem('nexura_settings', ${JSON.stringify(JSON.stringify({ welcomeDone: true, ...data.settings }))}); true`);
+    await js(win, `localStorage.clear(); localStorage.setItem('nexura_library', ${JSON.stringify(JSON.stringify(data.library))}); localStorage.setItem('nexura_settings', ${JSON.stringify(JSON.stringify({ welcomeDone: true, screenView: 'mix', viewDefaultV2: true, ...data.settings }))}); true`);
     await load(win);
     await wait(2500);
     await js(win, `document.querySelector('.start-overlay')?.remove(); document.querySelectorAll('.modal-ov').forEach(m => m.remove()); true`);
@@ -71,7 +71,7 @@ app.whenReady().then(async () => {
     // 1) edición del grid: cabezal justo antes del cambio de tempo, editor abierto
     c.grid = await js(win, `(async () => {
       const app = nexuraApp, d = app.decks[0], ui = app.deckUIs[0];
-      ui.gridEdit = true; ui.refresh('grid');
+      d.toggleGridEdit(true);
       d.seek(58.6); await new Promise(r => setTimeout(r, 150));
       const antes = d.bpm;
       d.seek(61); await new Promise(r => setTimeout(r, 150));
@@ -95,7 +95,7 @@ app.whenReady().then(async () => {
     // 2) modo de pads Stems con Stems FX (stems simulados: 4 tonos)
     c.stems = await js(win, `(async () => {
       const app = nexuraApp, d = app.decks[0], ui = app.deckUIs[0];
-      ui.gridEdit = false; ui.refresh('grid');
+      d.toggleGridEdit(false);
       Object.defineProperty(app.stems, 'available', { get: () => true, configurable: true }); // en el navegador no hay motor de stems
       const sr = app.engine.ctx.sampleRate, n = Math.round(d.duration * sr);
       const st = [440, 110, 55, 880].map(f => { const L = new Int16Array(n); for (let i = 0; i < n; i++) L[i] = Math.round(6000 * Math.sin(2 * Math.PI * f * i / sr)); return { L, R: L.slice() }; });

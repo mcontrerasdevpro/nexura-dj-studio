@@ -42,7 +42,7 @@ fs.writeFileSync(preload, `
 `);
 
 const LIB = { version: 1, tracks: [], crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] };
-const SETTINGS = { welcomeDone: true, libView: 'all', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' };
+const SETTINGS = { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, libView: 'all', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' };
 const js = (win, code) => win.webContents.executeJavaScript(code, true).catch(e => ({ error: String(e && e.message || e) }));
 async function until(win, code, ms = 5000) {
   const t0 = Date.now(); let v;

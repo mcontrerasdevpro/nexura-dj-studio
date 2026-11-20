@@ -21,6 +21,7 @@ export const fmtBeats = (b) => b >= 1 ? String(Math.round(b * 1000) / 1000) : '1
 const SEC_PER_REV = 60 / 33.333; // un giro de plato = 1,8 s de audio a 33⅓ rpm
 const BEND_START = 0.01, BEND_RAMP_MS = 1500; // pitch bend: ±1 % al pulsar, hasta el máximo en 1,5 s
 export const PITCH_FINE = 0.01;               // BPM por pulsación del pitch fino
+export const ATTACK_WIN = 0.03;               // con Q, un cue se pega al golpe si está a menos de 30 ms de la línea
 const YT_SYNC_MSG = 'SYNC no está disponible con vídeos de YouTube: el reproductor oficial no permite ajustar el tempo ni la fase con precisión. Iguala el tempo con el pitch.';
 const frac = (x) => ((x % 1) + 1) % 1;
 const wrapHalf = (x) => (x > 0.5 ? x - 1 : x < -0.5 ? x + 1 : x);
@@ -198,6 +199,7 @@ export class Deck extends Emitter {
     this.semis = 0; this.send({ t: 'semis', v: 0 });
     this.loggedPlay = false;
     this.cuePoint = 0;
+    this._gridDrag = null; this.gridEditing = false; // el modo «Editar grid» es de la pista que había
     this.st = { pos: 0, sp: 0, at: performance.now() };
     // Auto-gain a partir del RMS analizado
     if (this.app.settings.autoGain && t.rmsDb != null && !this.isYT) {
@@ -309,6 +311,7 @@ export class Deck extends Emitter {
     this.stemsOn = false; this.stemGains = [1, 1, 1, 1]; this.resetStemFx();
     if (this.yt) this.yt.destroy(), this.yt = null;
     this.track = null; this.isYT = false; this.duration = 0;
+    this._gridDrag = null; this.gridEditing = false;
     this.emit('track', null); this.emit('state');
   }
   stopAll() {
@@ -359,7 +362,8 @@ export class Deck extends Emitter {
     this.seek(t);
   }
 
-  cueDown() {
+  // free: Mayús/Alt (el cue se pone justo aquí, sin cuantizar)
+  cueDown(free = false) {
     if (!this.track) return;
     if (this.playing && !this.cuePreview) {
       this.pause();
@@ -370,7 +374,7 @@ export class Deck extends Emitter {
         this.playing = true;
         if (this.isYT) this.yt.play(); else this.send({ t: 'play', v: true });
       } else {
-        this.cuePoint = this.q(this.time);
+        this.cuePoint = this.cueTime(this.time, free);
         this.seek(this.cuePoint);
       }
     }
@@ -592,7 +596,8 @@ export class Deck extends Emitter {
 
   // ---------------------------------------------------------------- hot cues
   saveCues() { this.app.library.update(this.track.id, { cues: this.track.cues, loops: this.track.loops, cueLoops: this.track.cueLoops }); this.emit('cues'); }
-  hotcue(n) {
+  // free: poner el cue sin cuantizar (Mayús/Alt + pad vacío)
+  hotcue(n, free = false) {
     if (!this.track) return;
     const c = this.track.cues[n];
     if (c) {
@@ -607,7 +612,7 @@ export class Deck extends Emitter {
       this.saveCues();
       this.app.toast(`Cue Loop ${n + 1} guardado (${this.loopLabel(this.loop.e - this.loop.s)})`);
     } else {
-      const t = this.q(this.time);
+      const t = this.cueTime(this.time, free);
       this.track.cues[n] = { t, color: CUE_COLORS[n % CUE_COLORS.length], name: '' };
       this.saveCues();
     }
@@ -737,7 +742,7 @@ export class Deck extends Emitter {
   // Pad vacío: guarda un cue en la posición actual (cuantizado con Q) con un loop de la longitud del
   // auto loop (o el loop activo, si lo hay). Pad lleno: salta al cue y activa su loop; otra vez, lo sale.
   cueLoopSlots() { const t = this.track; if (!t) return null; if (!t.cueLoops) t.cueLoops = Array(8).fill(null); return t.cueLoops; }
-  cueLoop(n) {
+  cueLoop(n, free = false) {
     if (!this.track) return;
     if (this.isYT) return this.app.toast('Los loops no están disponibles en pistas de YouTube', 'warn');
     const cl = this.cueLoopSlots(), c = cl[n];
@@ -745,7 +750,7 @@ export class Deck extends Emitter {
     let s, e;
     if (this.loop.on && this.loop.e > this.loop.s && !this.rolling) { s = this.loop.s; e = this.loop.e; }
     else {
-      s = this.q(this.time);
+      s = this.cueTime(this.time, free);
       e = this.bpm ? this.beatTime(this.beatAt(s) + this.loopBeats) : s + this.loopBeats * 0.5;
     }
     cl[n] = { t: s, le: Math.min(e, this.duration || e), color: CUE_COLORS[n % CUE_COLORS.length], name: '' };
@@ -816,7 +821,11 @@ export class Deck extends Emitter {
   padDown(i, shift = false) {
     const m = this.padMode;
     if (shift) {
-      if (m === 'hotcue') this.deleteCue(i);
+      // Mayús/Alt + pad: borra el cue; si el pad está vacío, lo pone justo aquí (sin cuantizar)
+      const t = this.track;
+      if (m === 'hotcue' && t && !t.cues[i]) this.hotcue(i, true);
+      else if (m === 'cueloop' && t && !(t.cueLoops && t.cueLoops[i])) this.cueLoop(i, true);
+      else if (m === 'hotcue') this.deleteCue(i);
       else if (m === 'cueloop') this.deleteCueLoop(i);
       else if (m === 'savedloop') this.deleteSavedLoop(i);
       else if (m === 'sampler') this.app.sampler.stop(i);
@@ -912,16 +921,79 @@ export class Deck extends Emitter {
       this.emit('track', this.track);
     }
   }
-  // Todo cambio del grid pasa por aquí: guarda el estado anterior para «Deshacer» (20 pasos por pista)
-  commitGrid(upd, emit = true) {
+  // Todo cambio del grid pasa por aquí: guarda el estado anterior para «Deshacer» (20 pasos por pista). Lo editado
+  // queda como manual (bpmLocked: el análisis no lo vuelve a calcular nunca solo) y, la primera vez, se guarda el
+  // grid del análisis (gridAuto) para «Volver al análisis». prev: estado de antes (arrastre de la rejilla)
+  commitGrid(upd, emit = true, prev = null) {
     const t = this.track; if (!t) return;
     if (!this.gridUndo || this.gridUndo.id !== t.id) this.gridUndo = { id: t.id, stack: [] };
-    const st = this.gridUndo.stack;
-    st.push({ bpm: t.bpm, firstBeat: t.firstBeat || 0, grid: t.grid ? t.grid.map(m => ({ ...m })) : null, bpmLocked: !!t.bpmLocked });
+    const st = this.gridUndo.stack, before = prev || this.gridState();
+    st.push(before);
     if (st.length > 20) st.shift();
-    this.app.library.update(t.id, upd);
+    if (!before.bpmLocked && !t.gridAuto && before.bpm) upd = { ...upd, gridAuto: { bpm: before.bpm, firstBeat: before.firstBeat, grid: before.grid } };
+    this.app.library.update(t.id, { bpmLocked: true, ...upd });
     if (emit) { this.emit('track', t); this.emit('grid'); if (this.sync) this.syncNow(); }
   }
+  gridState() {
+    const t = this.track;
+    return { bpm: t.bpm, firstBeat: t.firstBeat || 0, grid: t.grid ? t.grid.map(m => ({ ...m })) : null, bpmLocked: !!t.bpmLocked };
+  }
+
+  // ---------------------------------------------------------------- modo «Editar grid»
+  // Mientras está activo, la onda dibuja el grid destacado y arrastrarla mueve la rejilla (no la reproducción)
+  toggleGridEdit(on = !this.gridEditing) {
+    if (on && (!this.track || this.isYT)) return this.app.toast('Carga una pista local para editar su grid', 'info');
+    if (on && !this.bpm) return this.app.toast('Primero analiza la pista o fija su BPM (TAP o doble clic en el BPM)', 'warn');
+    if (on && !this.gridEditable()) return;
+    this.gridEditing = !!on;
+    if (!on) this.gridDragEnd();
+    this.emit('grid');
+  }
+  // ◂ ▸ del grid: dir = ±1; step = ms (1 o 10) o 'half' (medio beat)
+  gridNudge(dir, step = 1) {
+    const ms = step === 'half' ? (this.beatLen || 0) * 500 : step;
+    if (ms) this.gridShift(dir * ms);
+  }
+  // Arrastrar la rejilla sobre la onda: se mueve en vivo y se guarda (un solo paso de «Deshacer») al soltar
+  gridDragStart() {
+    if (!this.gridEditing || !this.track || !this.bpm || !this.gridEditable()) return false;
+    this._gridDrag = { prev: this.gridState(), d: 0 };
+    return true;
+  }
+  gridDragMove(sec) {
+    const g = this._gridDrag, t = this.track; if (!g || !t) return;
+    g.d += sec;
+    const p = g.prev;
+    if (p.grid && p.grid.length > 1) { t.grid = p.grid.map(m => ({ t: m.t + g.d, bpm: m.bpm })); t.firstBeat = t.grid[0].t; }
+    else t.firstBeat = this.wrapFirstBeat(p.firstBeat + g.d, p.bpm);
+    this.emit('grid');
+  }
+  gridDragEnd() {
+    const g = this._gridDrag; this._gridDrag = null;
+    if (!g || !this.track || Math.abs(g.d) < 1e-5) return;
+    const t = this.track, upd = { firstBeat: t.firstBeat };
+    if (t.grid && t.grid.length > 1) upd.grid = t.grid.map(m => ({ ...m }));
+    this.commitGrid(upd, true, g.prev);
+    this.app.toast(`Grid movido ${g.d > 0 ? '+' : '−'}${Math.round(Math.abs(g.d) * 1000)} ms`);
+  }
+  // primer beat dentro del primer compás (rejilla fija): el grid no cambia, solo dónde se guarda su origen
+  wrapFirstBeat(fb, bpm = this.track && this.track.bpm) {
+    const bar = 4 * 60 / bpm;
+    return ((fb % bar) + bar) % bar;
+  }
+
+  // ---------------------------------------------------------------- cues con cuantización
+  // Posición de un cue nuevo: sin Q (o con Mayús/Alt, o con el modificador MIDI «sin cuantizar» pulsado), justo
+  // donde está; con Q, el ataque real del golpe más cercano si está a menos de 30 ms de la línea del grid y, si
+  // no, la línea. Así un grid desplazado unos ms no impide poner el cue en el golpe
+  cueTime(t = this.time, free = false) {
+    if (free || this.freeCueHeld || !this.app.settings.quantize || !this.bpm) return t;
+    const line = this.nearestBeat(t);
+    const a = this.app.attackNear ? this.app.attackNear(this, line, ATTACK_WIN) : null;
+    return a != null ? a : line;
+  }
+  // modificador «sin cuantizar» (acción MIDI, mantener)
+  setFreeCue(on) { this.freeCueHeld = !!on; }
   canUndoGrid() { return !!(this.track && this.gridUndo && this.gridUndo.id === this.track.id && this.gridUndo.stack.length); }
   undoGrid() {
     if (this.track && !this.gridEditable()) return;

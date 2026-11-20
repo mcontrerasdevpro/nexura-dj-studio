@@ -23,7 +23,7 @@ const track = (id, title, bpm, firstBeat) => ({
 });
 const seed = () => ({
   library: { version: 1, tracks: [track('c125', 'Clic 125', 125, 0.1), track('c128', 'Clic 128', 128, 0.23)], crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] },
-  settings: { welcomeDone: true, libView: 'all', waveLayout: 'serato', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' }
+  settings: { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, libView: 'all', waveLayout: 'serato', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' }
 });
 
 const load = async (win) => { for (let i = 0; i < 4; i++) { try { await win.loadURL(URL); return; } catch (e) { await wait(800); } } throw new Error('no se pudo cargar ' + URL); };

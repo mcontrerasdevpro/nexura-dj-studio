@@ -40,7 +40,7 @@ function seed() {
   tracks[3].cues[0] = { t: 30, color: '#ff3b47', name: 'Drop' };
   return {
     library: { version: 1, tracks, crates: [{ id: 'fav', name: 'Favoritas', ids: ['b2', 'd1'], created: now - 1000 }], smart: [], history: [{ id: 'h1', date: now - 3600000, entries: [{ id: 'b2', title: 'Tema B', time: now - 3600000 }] }], prepare: ['b2'], ytPlaylists: [] },
-    settings: { libView: 'all', welcomeDone: true, waveLayout: 'serato', crateSort: 'custom' }
+    settings: { libView: 'all', welcomeDone: true, screenView: 'mix', viewDefaultV2: true, waveLayout: 'serato', crateSort: 'custom' }
   };
 }
 
