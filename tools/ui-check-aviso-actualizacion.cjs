@@ -73,7 +73,7 @@ app.whenReady().then(async () => {
       if (isLaptop !== laptop) { await js(win, `nexuraApp.toggleLaptopMode(); true`); await wait(300); }
     };
     await load(win);
-    await js(win, `localStorage.clear(); localStorage.setItem('nexura_settings', JSON.stringify({ welcomeDone: true, statsEnabled: false, lastVersion: '1.0.0-rc.2' })); true`);
+    await js(win, `localStorage.clear(); localStorage.setItem('nexura_settings', JSON.stringify({ welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: false, lastVersion: '1.0.0-rc.2' })); true`);
     await boot();
     const U = 'nexuraApp.updatesUI';
     const cur = '1.0.0-rc.2'; // en modo navegador la versión es «web»: se simula la instalada

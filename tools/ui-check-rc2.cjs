@@ -13,7 +13,7 @@ const URL = process.env.NEXURA_URL || 'http://localhost:5180/index.html';
 const SIZES = [[1280, 800], [375, 812]];
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const KEY = 'AIzaSyPRUEBA-no-es-real-123';
-const SETTINGS = { welcomeDone: true, statsEnabled: false, ytApiKey: KEY, ytClientSecret: 'GOCSPX-secreto-de-prueba', lastVersion: '1.0.0-rc.1' };
+const SETTINGS = { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: false, ytApiKey: KEY, ytClientSecret: 'GOCSPX-secreto-de-prueba', lastVersion: '1.0.0-rc.1' };
 
 const load = async (win) => { for (let i = 0; i < 4; i++) { try { await win.loadURL(URL); return; } catch (e) { await wait(800); } } throw new Error('no se pudo cargar ' + URL); };
 const js = (win, code) => win.webContents.executeJavaScript(code, true).catch(e => ({ error: String(e && e.message || e) }));

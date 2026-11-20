@@ -61,7 +61,7 @@ const lib = { version: 1, tracks: [track('yaesta', pIn, 'Ya en la biblioteca', '
 const data = path.join(process.env.NEXURA_USER_DATA, 'data');
 fs.mkdirSync(path.join(data, 'waveforms'), { recursive: true });
 fs.writeFileSync(path.join(data, 'library.json'), JSON.stringify(lib));
-fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, autoAnalyze: false, autoGain: false, waveLayout: 'serato', screenView: 'lib', libView: 'all' }));
+fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, viewDefaultV2: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, autoAnalyze: false, autoGain: false, waveLayout: 'serato', screenView: 'lib', libView: 'all' }));
 
 let pass = 0, fail = 0;
 const check = (name, ok, extra) => { if (ok) pass++; else fail++; console.log(`${ok ? '✓' : '✗'} ${name}${!ok && extra !== undefined ? ' → ' + JSON.stringify(extra).slice(0, 500) : ''}`); };

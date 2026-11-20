@@ -46,7 +46,7 @@ process.env.NEXURA_UPDATER_TEST = '1';
 // --- datos: biblioteca dañada + una copia buena de ayer
 const track = (id, title, artist) => ({ id, path: `C:\\Users\\Pepe\\Music\\${artist} - ${title}.mp3`, source: 'local', title, artist, album: '', genre: 'House', bpm: 124, firstBeat: 0.1, key: '', camelot: '8A', duration: 200, size: 1, cues: Array(8).fill(null), loops: Array(8).fill(null), cueLoops: Array(8).fill(null), added: 1, plays: 0, lastPlayed: 0, analyzed: true, energy: 5, sections: [] });
 const good = { tracks: [track('a1', 'Titanium', 'David Guetta'), track('a2', 'Seek Bromance', 'Tim Berg'), track('a3', 'Levels', 'Avicii')], crates: [{ id: 'c1', name: 'Boda de Lucía', ids: ['a1', 'a3'] }], smart: [], history: [], prepare: ['a2'], ytPlaylists: [] };
-const settings = { welcomeDone: true, statsEnabled: true, autoUpdate: true, waveLayout: 'serato', lastVersion: pkg.version }; // sin aviso de novedades (lo prueba ui-check-rc2-escritorio.cjs)
+const settings = { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: true, autoUpdate: true, waveLayout: 'serato', lastVersion: pkg.version }; // sin aviso de novedades (lo prueba ui-check-rc2-escritorio.cjs)
 const data = path.join(tmp, 'data');
 fs.mkdirSync(path.join(data, 'waveforms'), { recursive: true });
 fs.writeFileSync(path.join(data, 'library.json'), JSON.stringify(good).slice(0, 180)); // cortado: corte de luz

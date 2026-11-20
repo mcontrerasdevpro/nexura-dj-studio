@@ -94,7 +94,7 @@ fs.mkdirSync(path.join(data, 'waveforms'), { recursive: true });
 const libJson = JSON.stringify({ version: 1, tracks, crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] });
 fs.writeFileSync(path.join(data, 'library.json'), libJson);
 fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({
-  welcomeDone: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, waveLayout: 'serato', libView: 'all',
+  welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, waveLayout: 'serato', libView: 'all',
   autoAnalyze: false, stemsBackground: false, stemsAuto: false, aiAutoCues: true
 }));
 process.env.NEXURA_USER_DATA = tmp;

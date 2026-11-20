@@ -1,5 +1,40 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.9 · noviembre de 2026
+
+### Directo seguro: no se corta el tema que suena
+- Si intentas cargar un tema en un deck que **está sonando al aire** (fader arriba y crossfader abierto en su lado), la app **no lo carga** y te avisa: «El deck 1 está sonando al aire. Para cargar, pausa el deck o baja su fader». Si de verdad quieres, pulsa **«Cargar igualmente»** o **repite la carga antes de 2 segundos** (también desde la controladora).
+- Vale para todas las formas de cargar: arrastrar, doble clic, Enter, menús, controladora y sugerencias. El **Automix** y el **Autoplay** cargan como siempre, sin avisos.
+- Con el fader bajado o el crossfader cerrado se carga sin preguntar. En **Ajustes → Reproducción → «Proteger el deck que suena al cargar»** eliges: **Bloquear y avisar** (de serie), **Solo avisar** o **Desactivado**.
+
+### Al cargar: en pausa y en SYNC
+- Los temas **ya no arrancan solos** al cargarlos: se quedan **en pausa en su primer cue** (el hot cue más temprano o el principio). Antes, si el deck seguía sonando con el fader bajado, el tema nuevo entraba sonando. Si lo prefieres así, **Ajustes → Reproducción → «Al cargar un tema» → Empieza a sonar**.
+- **Sincronizar al cargar** (activado de serie): si hay otro deck sonando, el tema cargado se pone en **SYNC** (el botón se enciende) con su tempo y, al darle a play, **entra en fase**. Respeta el BPM que hayas fijado tú y, si el tempo no cabe en el rango del pitch, lo amplía (±16 % o ±50 %).
+
+### Editar el grid a mano, al milisegundo
+- Nuevo botón **«✎ EDITAR»** en la fila GRID (en la vista Biblioteca, **«✎ GRID»** junto al BPM; también con **clic derecho en la onda**). En modo edición la onda muestra la rejilla destacada, con los compases numerados, y **puedes arrastrar la rejilla con el ratón** hasta que las líneas caigan en el bombo (con Mayús, más fino).
+- **◂ ▸** mueven el grid **1 ms** (con Mayús, **10 ms**; con Ctrl, **medio beat**). **1 AQUÍ** pone el beat 1 del compás donde está el cabezal. **BPM ±0,01 y ±0,1**, **TAP**, **↶ deshacer** y **ANÁLISIS** (volver al grid que calculó la app).
+- Lo que edites queda como tuyo: la app **no lo vuelve a calcular nunca sola**.
+
+### Cues justo en el golpe, con Q
+- Con **Q (cuantización)** activa, el cue ya no se pega a ciegas a la línea del grid: si hay **un golpe a menos de 30 ms de la línea, va al ataque real del golpe**; si no, a la línea. Así, aunque el grid esté unos milisegundos desplazado, el cue cae en el bombo del subidón.
+- **Mayús o Alt** al poner el cue (en un pad vacío o en CUE): justo donde está, **sin cuantizar**. En la controladora, la acción **«Cues sin cuantizar»** (mantener) hace lo mismo.
+
+### Botones BEND como en los reproductores de CD
+- Botones **BEND − / +** grandes junto al pitch (en la vista Biblioteca, al lado de CUE · PLAY · SYNC). **Mientras los mantienes**, el tema frena o acelera, suave al principio (±1 %) y más si sigues (hasta ±4 % en 1,5 s); **al soltar vuelve a su tempo**. Funcionan con el ratón y con el dedo en pantallas táctiles, con las teclas A/S y K/L y desde la controladora (**Pitch bend − / +**). La rueda del ratón sobre el plato y el jog hacen un empujón suave con la música sonando.
+
+### Salida de audio sin silencios ni ecos
+- **Cambiar la salida de audio con la música sonando** ya no deja todo en silencio hasta reiniciar: cambia al momento y los decks siguen donde estaban. Si el dispositivo **se desconecta**, sigue sonando por el predeterminado y **vuelve a él** cuando lo conectas.
+- Arreglado: con la salida en **«Automático»**, en algunos equipos **todo sonaba como con reverb**. La misma señal salía dos veces: por los canales 3/4 de una tarjeta o unos auriculares con **sonido envolvente** (que la procesan como una sala) o por una segunda salida de auriculares abierta en el mismo dispositivo. Ahora «Automático» solo usa 4 canales con la interfaz de una controladora, y **nunca abre dos salidas al mismo dispositivo**.
+
+### Cues automáticos donde cambia el tema
+- Los cues automáticos (Inicio, Entrada, Drop, Break y Outro) ahora salen de lo que suena en cada compás: **Entrada** = el primer bombo de verdad; **Break** = cuando caen la energía y los bajos; **Drop** = cuando vuelven el bombo y los bajos tras el break; **Outro** = cuando la mezcla empieza a vaciarse. Cuadrados a frase. Si una parte no está clara, **no se pone**: mejor 3 buenos que 5 malos.
+- Medido con 10 temas de house, trance y makina: de **21 cues bien y 11 mal** a **29 bien y 6 mal**. Se recalculan solos al cargar cada tema; **tus cues no se tocan nunca**.
+
+### Más cosas
+- La app **arranca en la vista Biblioteca** (la que más pistas enseña). Si eliges la vista Mezcla, la recuerda.
+- Las pestañas de los modos de pad se leen enteras («Cue Loop», «Saved Loop», «Beat Jump», «Pitch Play»); si no caben, se abrevian y el nombre completo sale al pasar el ratón.
+
 ## 1.0.0-rc.8 · noviembre de 2026
 
 ### Cuadrar dos temas: el grid y el SYNC, al milisegundo

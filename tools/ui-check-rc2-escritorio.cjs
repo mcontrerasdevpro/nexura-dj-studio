@@ -82,7 +82,7 @@ process.env.NEXURA_NO_UPDATES = '1';
 const data = path.join(tmp, 'data');
 fs.mkdirSync(path.join(data, 'waveforms'), { recursive: true });
 fs.writeFileSync(path.join(data, 'library.json'), JSON.stringify({ tracks: [], crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] }));
-fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, statsEnabled: false, autoUpdate: true, lastVersion: '1.0.0-rc.1', ytApiKey: '', ytClientSecret: '' }));
+fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: false, autoUpdate: true, lastVersion: '1.0.0-rc.1', ytApiKey: '', ytClientSecret: '' }));
 
 const js = (win, code) => win.webContents.executeJavaScript(code, true).catch(e => ({ error: String(e && e.message || e) }));
 async function shot(win, name) {

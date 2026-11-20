@@ -198,24 +198,48 @@ export class WaveDetail {
       ytAt = performance.now();
       d.seek(ytTimeAt(e.clientX - this.c.getBoundingClientRect().left, this.c.clientWidth, d, true));
     };
+    // modo «Editar grid»: arrastrar mueve la rejilla (no la reproducción); se guarda al soltar
+    let gridDrag = false;
+    const secPerPx = () => this.zoom * tempoScale(this.deck) / (canvasSize(this.c).w || 1);
     this.c.addEventListener('pointerdown', (e) => {
-      if (!this.deck.track) return;
+      if (!this.deck.track || e.button !== 0) return;
       dragging = true; lastX = e.clientX;
       this.c.setPointerCapture(e.pointerId);
       if (this.deck.isYT) return ytSeek(e, true);
-      g.press(e.clientX);
+      gridDrag = !!this.deck.gridEditing && this.deck.gridDragStart();
+      if (!gridDrag) g.press(e.clientX);
     });
     this.c.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       if (this.deck.isYT) return ytSeek(e, false);
-      g.move(e.clientX, this.zoom * tempoScale(this.deck) / (canvasSize(this.c).w || 1));
+      if (gridDrag) {
+        // Mayús: 10 veces más fino
+        const dx = e.clientX - lastX; lastX = e.clientX;
+        if (dx) this.deck.gridDragMove(dx * secPerPx() * (e.shiftKey ? 0.1 : 1));
+        return;
+      }
+      g.move(e.clientX, secPerPx());
     });
     const up = (e) => {
       if (!dragging) return;
       dragging = false;
       if (this.deck.isYT) { if (e.type === 'pointerup' && e.clientX !== lastX) ytSeek(e, true); return; }
+      if (gridDrag) { gridDrag = false; this.deck.gridDragEnd(); return; }
       g.release();
     };
+    // clic derecho: editar el grid desde la propia onda
+    this.c.addEventListener('contextmenu', (e) => {
+      const d = this.deck;
+      if (!d.track || d.isYT || !this.app.contextMenu) return;
+      e.preventDefault();
+      const items = [{ label: d.gridEditing ? '✓ Terminar de editar el grid' : '✎ Editar grid', fn: () => d.toggleGridEdit() }];
+      if (d.bpm) items.push(
+        { label: '1 aquí (beat 1 del compás en el cabezal)', fn: () => d.downbeatHere() },
+        { label: 'Deshacer el último cambio del grid', fn: () => d.undoGrid() },
+        { label: 'Volver al grid del análisis', fn: () => this.app.restoreAnalysisGrid(d) });
+      if (d.hasGridMarkers) items.push({ label: 'Quitar las marcas (BPM fijo)', fn: () => d.clearGridMarkers() });
+      this.app.contextMenu(e, items);
+    });
     this.c.addEventListener('pointerup', up);
     this.c.addEventListener('pointercancel', up);
     this.c.addEventListener('wheel', (e) => {
@@ -283,15 +307,31 @@ export class WaveDetail {
       ctx.fillRect(xOf(d.loop.s), 0, (d.loop.e - d.loop.s) * pxPerSec, h);
     }
 
-    // beatgrid
+    // beatgrid (en «Editar grid», destacado: todas las líneas de arriba abajo, compases en ámbar y numerados)
+    const editing = !!d.gridEditing;
     if (d.bpm) {
       const bl = d.beatLen;
       const b0 = Math.floor(d.beatAt(t0)), b1 = Math.ceil(d.beatAt(t0 + w / pxPerSec));
       const step = pxPerSec * bl < 6 ? 4 : 1;
+      if (editing) { ctx.fillStyle = 'rgba(255,163,26,0.07)'; ctx.fillRect(0, 0, w, h); }
       for (let b = b0; b <= b1; b++) {
         if (b % step) continue;
         const x = Math.round(xOf(d.beatTime(b))) + 0.5;
         const bar = ((b % 4) + 4) % 4 === 0;
+        if (editing) {
+          ctx.strokeStyle = bar ? 'rgba(255,190,80,0.95)' : 'rgba(255,255,255,0.45)';
+          ctx.lineWidth = bar ? 2 : 1;
+          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+          ctx.lineWidth = 1;
+          if (bar && h >= 40) {
+            const n = String(Math.floor(b / 4) + 1);
+            ctx.font = '700 10px Inter, sans-serif'; ctx.textAlign = 'left';
+            const tw = ctx.measureText(n).width + 6;
+            ctx.fillStyle = 'rgba(255,163,26,0.9)'; ctx.fillRect(x + 1, h - 30, tw, 13);
+            ctx.fillStyle = '#000'; ctx.fillText(n, x + 4, h - 20);
+          }
+          continue;
+        }
         ctx.strokeStyle = bar ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.13)';
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, bar ? h : 8); ctx.moveTo(x, h - (bar ? 0 : 8)); ctx.lineTo(x, h); ctx.stroke();
       }
@@ -339,7 +379,7 @@ export class WaveDetail {
     }
 
     // secciones detectadas por la IA (etiqueta arriba)
-    for (const sct of d.track.sections || []) {
+    for (const sct of editing ? [] : d.track.sections || []) {
       const x = xOf(sct.t);
       if (x < -80 || x > w + 10) continue;
       const col = SEC_COLORS[sct.type] || TC.muted;
@@ -355,6 +395,17 @@ export class WaveDetail {
       const tw = ctx.measureText(info).width + 10;
       ctx.fillStyle = TC['wave-chip']; ctx.fillRect(w - tw - 4, 2, tw, 14);
       ctx.fillStyle = DECK_LIGHT[d.idx]; ctx.fillText(info, w - 9, 12);
+    }
+
+    if (editing) {
+      // el texto más largo que quepa sin pisar el BPM de la derecha
+      ctx.font = '700 10px Inter, sans-serif'; ctx.textAlign = 'left';
+      const room = w - 12 - (d.bpm ? ctx.measureText(`${d.currentBpm.toFixed(2)} BPM · 12A · ⚡10`).width + 30 : 0);
+      const lbl = ['EDITAR GRID · arrastra la rejilla para ponerla en el bombo (Mayús: fino)', 'EDITAR GRID · arrastra la rejilla', 'EDITAR GRID']
+        .find(s => ctx.measureText(s).width + 10 <= room) || 'GRID';
+      const tw = ctx.measureText(lbl).width + 10;
+      ctx.fillStyle = '#ffa31a'; ctx.fillRect(12, 2, tw, 14);
+      ctx.fillStyle = '#000'; ctx.fillText(lbl, 17, 12);
     }
 
     // cue principal y hot cues

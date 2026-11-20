@@ -34,7 +34,7 @@ const lib = { version: 1, tracks: [track('a1', 'C:\\Users\\Pepe\\Music\\Levels.m
 const data = path.join(tmp, 'data');
 fs.mkdirSync(path.join(data, 'waveforms'), { recursive: true });
 fs.writeFileSync(path.join(data, 'library.json'), JSON.stringify(lib));
-fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, autoAnalyze: false, waveLayout: 'serato' }));
+fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ welcomeDone: true, screenView: 'mix', viewDefaultV2: true, statsEnabled: false, autoUpdate: false, lastVersion: pkg.version, autoAnalyze: false, waveLayout: 'serato' }));
 
 let pass = 0, fail = 0;
 const check = (name, ok, extra) => { if (ok) pass++; else fail++; console.log(`${ok ? '✓' : '✗'} ${name}${!ok && extra !== undefined ? ' → ' + JSON.stringify(extra).slice(0, 400) : ''}`); };

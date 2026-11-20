@@ -36,7 +36,7 @@ function seed(theme) {
       { id: 'p90', name: 'Pop 1990', ids: ['t8', 't9'], parent: 'pop', created: now - 5000 },
       { id: 'techno', name: 'Techno', ids: ['t7', 't8'], created: now - 4000 }],
       smart: [{ id: 's1', name: 'Más de 125 BPM', rules: [{ field: 'bpm', op: 'gt', value: 125 }], match: 'all' }], history: [], prepare: ['t1', 't2'], ytPlaylists: [] },
-    settings: { welcomeDone: true, lastVersion: '9.9.9', theme, libView: 'crate:y80', crateSort: 'custom', waveLayout: 'deck', libSideW: 240, libSort: { field: null, dir: 1 },
+    settings: { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, lastVersion: '9.9.9', theme, libView: 'crate:y80', crateSort: 'custom', waveLayout: 'deck', libSideW: 240, libSort: { field: null, dir: 1 },
       panels: { sampler: true }, libCols: ['title', 'artist', 'bpm', 'camelot', 'duration', 'rating', 'genre', 'energy', 'added'] }
   };
 }

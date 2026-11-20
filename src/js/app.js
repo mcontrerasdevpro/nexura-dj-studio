@@ -2,7 +2,7 @@
 import { Emitter, el, $, toast, debounce, fmtTime, clamp } from './util.js';
 import { platform, isDesktop } from './platform.js';
 import { AudioEngine } from './audio/engine.js';
-import { Deck } from './audio/deck.js';
+import { Deck, RANGES } from './audio/deck.js';
 import { SyncManager, SYNC_TICK_MS } from './audio/sync.js';
 import { FxUnit, EFFECTS, BEAT_VALUES } from './audio/fx.js';
 import { Sampler } from './audio/sampler.js';
@@ -31,6 +31,7 @@ import { splitListPath } from './library/crate-tree.js';
 import { treeFiles } from './library/folder-crates.js';
 import { readFileMarkers, parseCrate, id3Size } from './library/filemarkers.js';
 import { normalize, dominantBpm } from './audio/grid.js';
+import { findAttack } from './audio/attack.js';
 import { planFxRouting } from './audio/fx-routing.js';
 import { parseRequest, planSet } from './ai/prompt.js';
 import { WaveDetail } from './ui/waveform.js';
@@ -51,7 +52,11 @@ const DEFAULTS = {
   pitchRange: 0.08, keylockDefault: false, quantize: true, cueLoops: true, aiAutoCues: true, aiEnergyMode: 'keep', automixBars: 16, autoplay: { ...AUTOPLAY_DEFAULTS }, ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: '', syncPhase: true, autoGain: true,
   minBpm: 85, maxBpm: 175, motorStart: 4, motorStop: 4, jogSensitivity: 1,
   invertPitch: false, mc4000PhonesMidi: false, midiProfiles: {}, xfCurve: 'smooth', waveZoom: 6, waveZoomLink: true, waveZoomDecks: null, perfMode: false,
-  historyAfter: 30, loadOnPlaying: 'play', slipRelease: 0, stemSlipMode: 'mute', stemSlipBeats: 1,
+  historyAfter: 30, slipRelease: 0,
+  // 1.0.0-rc.9: carga sobre un deck que suena al aire (block = bloquear y avisar | warn = solo avisar | off), qué
+  // hace el tema al cargar (cue = en pausa en el primer cue | play = sigue sonando si el deck sonaba) y SYNC
+  // automático con el deck que suena
+  loadProtect: 'block', loadStart: 'cue', syncOnLoad: true, stemSlipMode: 'mute', stemSlipBeats: 1,
   protectLibrary: false, libCols: null, libColsSame: true, libColsByView: {}, libArtSize: 'small', crateSort: 'custom', crateSubTracks: true, libRail: 'auto', libHistOpen: false, folderToCrates: true, cleanupTrash: true, cleanupWriteFiles: true, crateCollapsed: [], deckLayout: 'auto', stemsDir: '', stemsModel: 'htdemucs', stemsAuto: true, stemsBackground: true, autoAnalyze: true,
   expansions: { flip: false, fxPresets: false, laptop: false, video: false, dvs: false, pitchTime: false },
   ytApiKey: '', ytClientId: '', ytClientSecret: '', spotifyClientId: '',
@@ -64,7 +69,9 @@ const DEFAULTS = {
   playheadPos: 'left', platterSensitivity: 'normal',
   // vista de la pantalla: «mix» (Mezcla, la de siempre) o «lib» (Biblioteca: decks compactos arriba y la
   // biblioteca ocupa el resto); densidad de la tabla: auto (Compacta solo en la vista Biblioteca) | normal | compact
-  screenView: 'mix', libDensity: 'auto',
+  // rc.9: la vista Biblioteca es la de serie; viewDefaultV2 = ya se ha aplicado la migración única (a partir de ahí
+  // se respeta la vista que elija el usuario)
+  screenView: 'lib', viewDefaultV2: true, libDensity: 'auto',
   // franjas plegables (fx y rec solo en la vista Biblioteca; el sampler, en las dos)
   panels: { sampler: false, fx: false, rec: false }, midiMap: {}, libView: 'all', libSort: { field: null, dir: 1 },
   // carpeta de grabación ('' = Música › Nexura DJ Studio › Grabaciones), campos del buscador (null = todos) y
@@ -108,6 +115,10 @@ class App extends Emitter {
     const pending = [];   // avisos de antes de que exista el registro (ajustes e información de la app)
     const saved = await this.watchStep('settings', platform.storeGet('settings'), pending);
     if (saved) this.settings = { ...DEFAULTS, ...saved, panels: { ...DEFAULTS.panels, ...(saved.panels || {}) } };
+    // Migración única (rc.9): hasta ahora se guardaba la vista Mezcla aunque nadie la eligiera (era la de serie y
+    // los ajustes se guardan enteros), así que no se sabe quién la eligió: todos empiezan una vez en Biblioteca y
+    // desde entonces se recuerda la que elijan (botón ▤ BIBLIOTECA, F10 o Ajustes)
+    if (saved && !saved.viewDefaultV2) { this.settings.screenView = 'lib'; this.settings.viewDefaultV2 = true; this.saveSettingsSoon(); }
     this.settings.expansions = { ...DEFAULTS.expansions, ...(this.settings.expansions || {}) };
     this.settings.autoplay = autoplayOptions(this.settings.autoplay);
     this.settings.theme = applyTheme(this.settings.theme);
@@ -186,6 +197,23 @@ class App extends Emitter {
       this.startup.outputs = 'error';
       this.feedback.log('ERROR', 'audio', 'No se pudieron aplicar las salidas de audio: ' + ((e && e.message) || e));
     });
+    // salida de audio: avisos del motor al registro técnico; dispositivo desconectado o que vuelve; audio parado
+    this.engine.on('log', (level, msg) => this.feedback.log(level, 'audio', msg));
+    this.engine.on('sinkerror', (what) => toast(`No se pudo abrir el dispositivo de ${what}: revisa Ajustes → Audio`, 'warn', 6000));
+    this.engine.on('stalled', () => toast('La salida de audio no responde. Prueba otra vez a elegir el dispositivo en Ajustes → Audio', 'error', 8000, { label: 'Ajustes', fn: () => this.settingsUI.open('audio') }));
+    this.engine.on('device', (what) => {
+      this.feedback.log('WARN', 'audio', what === 'lost' ? 'Se ha desconectado el dispositivo de salida elegido: suena por el predeterminado' : 'Ha vuelto el dispositivo de salida elegido');
+      toast(what === 'lost' ? 'Se ha desconectado la salida de audio elegida: suena por la predeterminada hasta que vuelva' : 'Ha vuelto la salida de audio elegida', what === 'lost' ? 'warn' : 'ok', 6000);
+      // perdido: al predeterminado (sin cambiar el ajuste); de vuelta: a él otra vez. Los decks siguen igual
+      const want = this.settings.masterDevice;
+      if (what === 'lost') this.settings.masterDevice = '';
+      this.applyOutputs(true).catch(e => console.warn('salidas', e)).finally(() => { this.settings.masterDevice = want; this.engine.wantMaster = want || ''; });
+    });
+    navigator.mediaDevices?.addEventListener?.('devicechange', debounce(async () => {
+      const outs = await this.engine.listOutputs(false);
+      this.feedback.log('INFO', 'audio', `Cambio de dispositivos: ${outs.length} salidas de audio`);
+      this.engine.onDevicesChanged(outs);
+    }, 600));
     this.engine.on('mixer', () => this.saveMixerSoon());
     this.engine.on('xf', () => this.saveMixerSoon());
     this.engine.on('rec', () => this.updateStatus());
@@ -341,7 +369,11 @@ class App extends Emitter {
   async applyOutputs(silent = false, sink = true) {
     const s = this.settings;
     this.engine.extDecks = this.deckCount;
-    const mode = await this.engine.setOutputs({ mode: s.outputMode, masterDevice: s.masterDevice, cueDevice: s.cueDevice, sink });
+    // nombre del dispositivo master (para «Automático»: 4 canales solo con la interfaz de una controladora)
+    let masterLabel = '';
+    if (s.outputMode === 'auto') masterLabel = await Promise.race([this.engine.outputLabel(s.masterDevice), new Promise(r => setTimeout(() => r(''), 1500))]);
+    const mode = await this.engine.setOutputs({ mode: s.outputMode, masterDevice: s.masterDevice, cueDevice: s.cueDevice, sink, masterLabel, controller: this.midi?.controllerName || '' });
+    this.feedback?.log('INFO', 'audio', 'Salidas abiertas: ' + this.engine.sinkReport());
     const f = this.deckCount === 4;
     const ext = {
       '8ch': 'Mesa externa: Deck 1 → 1/2 · Deck 2 → 3/4 · Deck 3 → 5/6 · Deck 4 → 7/8',
@@ -726,23 +758,110 @@ class App extends Emitter {
     return added;
   }
 
-  async loadToDeck(id, idx) {
+  // ¿Se oye el deck en la salida principal? Sonando, con el fader de canal arriba y el crossfader no cerrado en
+  // su lado (engine.onAir). Con la mesa externa los faders son los de la mesa: si suena, cuenta como al aire
+  deckOnAir(idx) {
+    const d = this.decks[idx];
+    return !!(d && d.track && d.playing && this.engine.onAir(idx));
+  }
+  // Tema recién cargado: en pausa en el primer cue (el hot cue más temprano; sin cues, el principio)
+  toFirstCue(d) {
+    const cues = (d.track && d.track.cues || []).filter(c => c && isFinite(c.t));
+    const t = cues.length ? Math.min(...cues.map(c => c.t)) : 0;
+    d.cuePoint = t;
+    if (t) d.seek(t);
+    d.emit('state');
+  }
+  // «Sincronizar al cargar»: si otro deck suena, el cargado se pone en SYNC con él (mismo tempo y, al darle a
+  // play, en fase). Una vez por carga: si la pista aún no tiene BPM, se intenta otra vez tras analizarla. Si el
+  // tempo no cabe en el rango del pitch, se amplía el rango (±8 → ±16 → ±50 %); si ni así, se avisa y no se pone
+  syncOnLoad(d) {
+    const t = d.track;
+    if (!t || d.isYT || this.settings.syncOnLoad === false || d.sync) return;
+    if (d._syncLoad === t) return;
+    const ref = this.decks.find(o => o !== d && o.playing && o.track && !o.isYT && o.bpm && this.isDeckActive(o.idx));
+    if (!ref) { d._syncLoad = t; return; }
+    if (!d.bpm) return; // sin BPM todavía: tras el análisis
+    d._syncLoad = t;
+    let r = ref.currentBpm / d.bpm;
+    for (const f of [0.5, 2]) if (Math.abs(r * f - 1) < Math.abs(r - 1)) r *= f;
+    const need = Math.abs(r - 1);
+    if (need > d.range + 1e-9) {
+      const wider = RANGES.find(x => x + 1e-9 >= need);
+      if (!wider) { toast(`Deck ${d.idx + 1}: el tempo del deck ${ref.idx + 1} queda fuera del rango del pitch (${(need * 100).toFixed(1)} %). SYNC no se ha activado`, 'warn', 5000); return; }
+      d.setRange(wider);
+      toast(`Deck ${d.idx + 1}: rango del pitch ampliado a ±${Math.round(wider * 100)} % para sincronizar`, 'info', 3500);
+    }
+    d.setSync(true);
+  }
+  isDeckActive(i) { return i < this.deckCount; }
+
+  // Ataque del golpe más cercano a t (± win s) en el audio del deck (el AudioBuffer decodificado sigue en la
+  // caché mientras la pista está cargada); null si no hay un golpe claro o no está el audio
+  attackNear(d, t, win) {
+    const buf = d.track && !d.isYT ? this.bufferCache.get(d.track.id) : null;
+    if (!buf) return null;
+    const chs = [buf.getChannelData(0)];
+    if (buf.numberOfChannels > 1) chs.push(buf.getChannelData(1));
+    return findAttack(chs, buf.sampleRate, t, win);
+  }
+
+  // «Volver al análisis» (modo Editar grid): el grid que calculó la app. Si se guardó al editarlo (gridAuto), se
+  // recupera al momento; si no (pistas editadas antes de rc.9), se vuelve a calcular el grid con el audio del deck
+  async restoreAnalysisGrid(d) {
+    const t = d.track;
+    if (!t || d.isYT || !d.gridEditable()) return;
+    if (!t.bpmLocked) return toast('El grid ya es el del análisis', 'info');
+    if (!(await this.confirm('¿Volver al grid del análisis? Se pierden tus cambios del grid de esta pista (puedes deshacerlo con ↶).'))) return;
+    const prev = d.gridState();
+    let upd;
+    if (t.gridAuto && t.gridAuto.bpm) upd = { bpm: t.gridAuto.bpm, firstBeat: t.gridAuto.firstBeat || 0, grid: t.gridAuto.grid || null, bpmLocked: false, gridAuto: null };
+    else {
+      const buf = this.bufferCache.get(t.id);
+      if (!buf) return toast('Vuelve a cargar la pista para recalcular su grid', 'warn');
+      toast('Recalculando el grid…', 'info', 1500);
+      try {
+        const meta = await this.analyzer.analyzeTrack({ ...t, bpmLocked: false }, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
+        upd = { bpm: meta.bpm, firstBeat: meta.firstBeat, grid: meta.grid || null, gridV: meta.gridV, bpmLocked: false, gridAuto: null };
+      } catch (e) { return toast('No se pudo recalcular el grid: ' + e.message, 'error'); }
+    }
+    d.commitGrid(upd, true, prev); // upd.bpmLocked = false: vuelve a ser el del análisis
+    toast(`Grid del análisis: ${(+t.bpm).toFixed(2)} BPM`, 'ok');
+  }
+
+  // Todas las cargas pasan por aquí (arrastrar, doble clic, Enter, menús, MIDI, sugerencias, Autoplay, Automix…).
+  // opts.auto: la carga la hace el Automix o el Autoplay (gestionan ellos el deck: ni aviso, ni cue, ni sync)
+  // opts.force: «Cargar igualmente» (o repetir la carga en 2 s) sobre un deck que suena al aire
+  async loadToDeck(id, idx, opts = {}) {
     const t = this.library.getAny(id);
     const d = this.decks[idx];
     if (!t || !d) return;
     this.focusDeck(idx);
-    // Cargar sobre un deck que suena: sustituir y seguir sonando (por defecto), sustituir en pausa o bloquear
-    const mode = this.settings.loadOnPlaying || 'play';
-    const wasPlaying = d.playing;
-    if (wasPlaying && mode === 'block') {
-      toast(`El deck ${idx + 1} está sonando. Páusalo antes de cargar otra pista (Ajustes → Reproducción).`, 'warn');
-      return;
+    const auto = !!opts.auto, wasPlaying = d.playing;
+    // Deck que suena al aire: cargar cortaría la música. Bloquear y avisar (por defecto), solo avisar o nada
+    const protect = this.settings.loadProtect || 'block';
+    if (!auto && protect !== 'off' && this.deckOnAir(idx)) {
+      const g = this._loadGuard, now = performance.now();
+      const repeated = g && g.idx === idx && now - g.at < 2000;
+      if (protect === 'block' && !opts.force && !repeated) {
+        this._loadGuard = { idx, id, at: now };
+        this.feedback?.log('INFO', 'carga', `Carga bloqueada: el deck ${idx + 1} suena al aire`);
+        this.emit('loadGuard', { idx, id, force: () => this.loadToDeck(id, idx, { ...opts, force: true }) });
+        return 'blocked';
+      }
+      this._loadGuard = null;
+      this.emit('loadGuard', { idx, id: null });
+      toast(`Has cargado sobre el deck ${idx + 1}, que sonaba al aire`, 'warn', 4000);
     }
-    const resume = wasPlaying && mode === 'play';
+    // Al cargar: en pausa en el primer cue (por defecto) o, con «Empieza a sonar», sigue sonando si el deck sonaba
+    const resume = !auto && wasPlaying && this.settings.loadStart === 'play';
     const req = d._loadReq = (d._loadReq || 0) + 1; // si mientras tanto se pide otra pista en este deck, gana la última
     this.engine.resume();
     if (t.source === 'youtube') {
-      try { await d.loadYouTube(t); if (resume && d.track === t) d.play(); } catch (e) { toast('No se pudo cargar el vídeo: ' + e.message, 'error'); }
+      try {
+        await d.loadYouTube(t);
+        if (d.track === t && !auto) { this.toFirstCue(d); if (resume) d.play(); }
+      } catch (e) { toast('No se pudo cargar el vídeo: ' + e.message, 'error'); }
       return;
     }
     const busy = toast(`Cargando «${t.title}»…`, 'info', 1500);
@@ -758,7 +877,11 @@ class App extends Emitter {
     const copies = await Deck.copyChannels(buf);
     if (d._loadReq !== req) return;
     await d.load(t, buf, copies);
-    if (resume && d.track === t) d.play(); // la nueva pista entra sonando, sin silencio
+    if (d.track === t && !auto) {
+      this.toFirstCue(d);
+      this.syncOnLoad(d);
+      if (resume) d.play(); // «Empieza a sonar»: la nueva pista entra sonando, sin silencio
+    }
     // stems ya separados: se cargan en segundo plano (la pista suena mientras tanto)
     if (t.stems && this.settings.stemsAuto !== false) this.stems.loadForDeck(d).catch(e => console.warn('stems', e));
     let wave = await this.analyzer.getWave(t.id);
@@ -770,7 +893,7 @@ class App extends Emitter {
         const meta = await this.analyzer.analyzeTrack(t, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
         this.library.update(t.id, meta);
         if (regrid && d.track === t) toast(`Beatgrid de «${t.title}» recalculado con el análisis nuevo: ${(+t.bpm).toFixed(2)} BPM`, 'info', 3500);
-        this.applyAutoCues(t);
+        await this.applyAutoCues(t);
         wave = await this.analyzer.getWave(t.id);
       } catch (e) { console.error(e); toast('Error al analizar: ' + e.message, 'error'); }
     }
@@ -778,11 +901,18 @@ class App extends Emitter {
       this.waves[idx].setWave(wave);
       this.deckUIs[idx].overview.setWave(wave);
       d.emit('track', t);
+      // recién analizada: los cues automáticos (y el BPM) ya están; si nadie ha tocado el deck, al primer cue y SYNC
+      if (!auto && !d.playing && d.time < 0.05 && !d.cuePoint) this.toFirstCue(d);
+      if (!auto && !d.sync) this.syncOnLoad(d);
       if (d.sync) d.syncNow(true);
     }
     // pista ya analizada con cues automáticos de la versión anterior (sin sentido): se recalculan al cargarla
     // (solo los automáticos; con la biblioteca protegida no se cambia nada)
-    if (wave && !this.library.protected && (t.cues || []).some(c => c && c.auto && c.autoV !== AUTO_CUE_VERSION)) this.applyAutoCues(t);
+    if (wave && !this.library.protected && (t.cues || []).some(c => c && c.auto && c.autoV !== AUTO_CUE_VERSION)) {
+      await this.applyAutoCues(t);
+      // si nadie ha tocado el deck (en pausa en el primer cue), al primer cue recalculado
+      if (!auto && d.track === t && !d.playing && Math.abs(d.time - d.cuePoint) < 0.02) this.toFirstCue(d);
+    }
   }
 
   // Importa bibliotecas y listas de otros programas DJ: colecciones XML / NML, listas .m3u/.m3u8,

@@ -34,7 +34,7 @@ fs.writeFileSync(preload, `
 
 const track = { id: 'p1', path: 'web:prueba.wav:1', source: 'local', title: 'Prueba MIDI', artist: 'Nexura', album: '', genre: 'House', year: '', comment: '', rating: 0, bpm: 124, firstBeat: 0, key: '', camelot: '8A', duration: 60, size: 1, cues: Array(8).fill(null), loops: Array(8).fill(null), cueLoops: Array(8).fill(null), added: 1, plays: 0, lastPlayed: 0, analyzed: true, energy: 5, sections: [] };
 const LIB = { version: 1, tracks: [track], crates: [], smart: [], history: [], prepare: [], ytPlaylists: [] };
-const SETTINGS = { welcomeDone: true, libView: 'all', waveLayout: 'serato', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' };
+const SETTINGS = { welcomeDone: true, screenView: 'mix', viewDefaultV2: true, libView: 'all', waveLayout: 'serato', autoAnalyze: false, autoGain: false, lastVersion: '9.9.9' };
 
 const js = (win, code) => win.webContents.executeJavaScript(code, true).catch(e => ({ error: String(e && e.message || e) }));
 async function key(win, keyCode) {

@@ -51,15 +51,20 @@ function cuesFor(x) {
   const r = analyze(x, SR, { minBpm: 85, maxBpm: 175 });
   const track = { bpm: r.bpm, firstBeat: r.firstBeat, grid: null, duration: x.length / SR, energyCurve: r.energyCurve };
   const wave = { data: r.wave, rate: r.waveRate };
-  return { r, track, wave, pts: AC.autoCuePoints(track, { energy: AC.waveEnergy(wave), onset: AC.waveOnset(wave) }) };
+  // con la forma de onda (lo normal): por compases (bombo, bajos y energía)
+  return { r, track, wave, pts: AC.autoCuePoints(track, { energy: AC.waveEnergy(wave), onset: AC.waveOnset(wave), wave }) };
 }
 
 // ---------------------------------------------------------------- tema principal
-const INTRO = { kick: 1, hat: 1 }, DROP = { kick: 1, hat: 1, bass: 1, lead: 1 }, DROP2 = { kick: 1, hat: 1, bass: 1.15, lead: 1.25 };
-const x = song([[32, INTRO], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]]);
+// 8 compases sin bombo (charles y pad), 24 con bombo, drop de 32 con bajo, break de 16 (solo pad), segundo drop
+// de 32 y outro de 16 (solo bombo y charles)
+const INTRO0 = { hat: 1, pad: 0.6 }, INTRO = { kick: 1, hat: 1 }, DROP = { kick: 1, hat: 1, bass: 1, lead: 1 }, DROP2 = { kick: 1, hat: 1, bass: 1.15, lead: 1.25 };
+const x = song([[8, INTRO0], [24, INTRO], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]]);
 const { r, track, wave, pts } = cuesFor(x);
 check('BPM detectado (128)', Math.abs(r.bpm - BPM) < 0.1, { bpm: r.bpm });
-const want = { start: 0, entry: 32, drop: 80, break: 64, outro: 112 }; // compás de cada parte
+// Entrada = primer bombo · Break = caída de bajos y energía · Drop = vuelta del bombo y los bajos tras el break ·
+// Outro = desde donde se vacía la mezcla
+const want = { start: 0, entry: 8, drop: 80, break: 64, outro: 112 }; // compás de cada parte
 const at = (bar) => LEAD + bar * BAR;
 console.log('  Cues:', pts.map(p => `${p.name} ${p.t.toFixed(2)} s (compás ${p.bar})`).join(' · '));
 check('5 cues o menos', pts.length <= 5 && pts.length >= 3, { n: pts.length });
@@ -68,9 +73,12 @@ for (const [type, bar] of Object.entries(want)) {
   check(`${AC.AUTO_CUE_NAMES[type]} en el compás ${bar} (${at(bar).toFixed(2)} s, ±1 beat)`, p && Math.abs(p.t - at(bar)) <= BEAT, p ? { t: +p.t.toFixed(3), err_beats: +((p.t - at(bar)) / BEAT).toFixed(2) } : 'no detectado');
 }
 check('Inicio en el primer downbeat (no en 0 s con silencio delante)', pts[0] && pts[0].type === 'start' && pts[0].t > 1.5, pts[0]);
-check('Cuadrados a frase: múltiplo de 4 compases desde el Inicio (8 salvo que no encaje)', pts.every(p => p.bar % 4 === 0), pts.map(p => p.bar));
+check('Cuadrados a frase: múltiplo de 2 compases (8 beats) desde el Drop', pts.every(p => (p.bar - 80) % 2 === 0), pts.map(p => p.bar));
 const bars = pts.map(p => p.bar).sort((a, b) => a - b);
-check('Al menos 16 compases entre un cue y otro', bars.every((b, i) => !i || b - bars[i - 1] >= 16), bars);
+check('Al menos 8 compases entre un cue y otro', bars.every((b, i) => !i || b - bars[i - 1] >= 8), bars);
+// con bombo desde el primer compás, la Entrada es el Inicio: no se pone otro cue
+const p0 = cuesFor(song([[32, INTRO], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]])).pts;
+check('Con bombo desde el principio: sin Entrada aparte (es el Inicio); Break 64, Drop 80 y Outro 112', !p0.some(p => p.type === 'entry') && ['break:64', 'drop:80', 'outro:112'].every(s => p0.some(p => `${p.type}:${p.bar}` === s)), p0.map(p => `${p.name}@${p.bar}`));
 check('Orden de los pads: Inicio, Entrada, Drop, Break, Outro', pts.every((p, i) => !i || AC.AUTO_CUE_SLOTS.indexOf(p.type) > AC.AUTO_CUE_SLOTS.indexOf(pts[i - 1].type)), pts.map(p => p.type));
 
 // sin forma de onda: con la curva de energía por frases del análisis
@@ -80,18 +88,23 @@ check('Sin forma de onda (curva por frases): 5 o menos, sin cues sin sentido', p
 // lo que hacía la versión anterior con el mismo tema: un hot cue por cada sección del análisis (hasta 8)
 console.log('  Antes (secciones del análisis → hasta 8 cues):', r.sections.map(s => `${s.label} ${s.t.toFixed(2)} s`).join(' · '));
 
+// sin forma de onda, con el mismo tema de antes: el método de la versión anterior (curva de energía)
+const xo = song([[32, INTRO], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]]), co = cuesFor(xo);
+const po = AC.autoCuePoints(co.track, { energy: AC.waveEnergy(co.wave), onset: AC.waveOnset(co.wave) });
+check('Sin forma de onda (método por energía): Entrada 32, Break 64, Drop 80, Outro 112', ['entry:32', 'break:64', 'drop:80', 'outro:112'].every(s => po.some(p => `${p.type}:${p.bar}` === s)), po.map(p => `${p.name}@${p.bar}`));
+
 // ---------------------------------------------------------------- cambios que no caen en múltiplos de 8
-// intro de 20 compases (frase de 4 tras el Inicio): la Entrada va al compás 20 (múltiplo de 4)
-const x4 = song([[20, INTRO], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]]);
-const p4 = cuesFor(x4).pts, e4 = p4.find(p => p.type === 'entry'), d4 = p4.find(p => p.type === 'drop');
+// intro de 20 compases sin bombo: la Entrada va al compás 20 (a 48 compases del Drop: frase de 8)
+const x4 = song([[20, INTRO0], [32, DROP], [16, { pad: 1 }], [32, DROP2], [16, INTRO]]);
+const p4 = cuesFor(x4).pts, e4 = p4.find(p => p.type === 'entry'), d4 = p4.find(p => p.type === 'drop'), b4 = p4.find(p => p.type === 'break');
 console.log('  Intro de 20 compases:', p4.map(p => `${p.name} compás ${p.bar}`).join(' · '));
-check('Intro de 20 compases: Entrada en el compás 20 y Drop en el 68 (cuadrados a 4 compases)', e4 && e4.bar === 20 && d4 && d4.bar === 68, p4.map(p => `${p.name}@${p.bar}`));
+check('Intro de 20 compases sin bombo: Entrada en el 20, Break en el 52 y Drop en el 68', e4 && e4.bar === 20 && b4 && b4.bar === 52 && d4 && d4.bar === 68, p4.map(p => `${p.name}@${p.bar}`));
 
 // ---------------------------------------------------------------- sin break: intro → drop → outro
 const xn = song([[32, INTRO], [48, DROP], [16, INTRO]]);
 const pn = cuesFor(xn).pts;
 console.log('  Sin break:', pn.map(p => `${p.name} compás ${p.bar}`).join(' · '));
-check('Sin break: no se inventa un Break y el drop sale una sola vez', !pn.some(p => p.type === 'break') && pn.filter(p => p.bar === 32).length === 1 && pn.length <= 4, pn.map(p => `${p.name}@${p.bar}`));
+check('Sin break: no se inventan Break ni Drop (mejor no poner que poner uno malo); Outro en el 80', !pn.some(p => p.type === 'break' || p.type === 'drop') && pn.some(p => p.type === 'outro' && p.bar === 80), pn.map(p => `${p.name}@${p.bar}`));
 
 // ---------------------------------------------------------------- tema plano: no hay partes claras
 const flat = song([[96, DROP]]);

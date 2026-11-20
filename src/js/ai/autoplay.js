@@ -116,7 +116,7 @@ export class Autoplay extends Emitter {
       const t = app.library.get(id);
       const entry = { id, index: this.queue.index, title: trackTitle(t) };
       if (!t) { this.queue.fail(id); continue; }
-      if (!(deck.track === t && !deck.playing)) await app.loadToDeck(id, deck.idx);
+      if (!(deck.track === t && !deck.playing)) await app.loadToDeck(id, deck.idx, { auto: true });
       if (g !== this.gen) return null;
       if (deck.track && deck.track.id === id) return entry;
       this.queue.fail(id);
