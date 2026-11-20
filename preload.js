@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('nexura', {
   storeGet: (name) => ipcRenderer.invoke('store:get', name),
   storeSet: (name, data) => ipcRenderer.invoke('store:set', name, data),
   analyzeFile: (job) => plain(ipcRenderer.invoke('analysis:run', job)),
+  // rc.10: ¿suena música? ¿sesión en directo? (confirmación al cerrar y actualizador en pausa)
+  liveState: (s) => ipcRenderer.send('live:state', { playing: !!(s && s.playing), live: !!(s && s.live) }),
   onFlush: (fn) => ipcRenderer.on('app:flush', async (_e, id) => { try { await fn(); } catch (_) { /* se cierra igualmente */ } ipcRenderer.send('app:flushed', id); }),
   gpu: {
     get: () => ipcRenderer.invoke('gpu:get'),

@@ -40,7 +40,7 @@ export class Feedback {
     let sent = 0;
     for (const p of q) { try { if ((await platform.report.send({ legacy: p })).ok) sent++; } catch (_) { /* sin red: silencio */ } }
     this.app.setSetting('feedbackQueue', []);
-    if (sent) toast(`Se han enviado ${sent} sugerencia(s) pendiente(s). ¡Gracias!`, 'ok', 5000);
+    if (sent) toast(`Se han enviado ${sent} sugerencia(s) pendiente(s). ¡Gracias!`, 'ok', 5000, null, { kind: 'bg' });
   }
 
   // Lo que la app sabe de la sesión (sin datos personales)
@@ -48,6 +48,8 @@ export class Feedback {
     const a = this.app;
     return { controller: a.midi?.controllerName || '', controllers: a.midi ? a.midi.controllerSummary : [], decks: a.deckCount === 4 ? 4 : 2, perf: a.perfDiag ? a.perfDiag.snapshot() : null };
   }
+  // (rc.10) el diálogo de sugerencias nunca se abre solo durante una sesión en directo: open() solo lo llaman el
+  // botón 💬 SUGERENCIAS, el menú «?» y Ajustes
   // Títulos, artistas, nombres de archivo y de crates: se quitan del registro antes de enviarlo
   knownNames() {
     const L = this.app.library, out = [];

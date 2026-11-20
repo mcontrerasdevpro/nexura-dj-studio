@@ -7,7 +7,7 @@ import { SyncManager, SYNC_TICK_MS } from './audio/sync.js';
 import { FxUnit, EFFECTS, BEAT_VALUES } from './audio/fx.js';
 import { Sampler } from './audio/sampler.js';
 import { ExpansionManager } from './audio/expansions.js';
-import { Analyzer, needsGrid } from './analysis/analyzer.js';
+import { Analyzer, needsGrid, needsKey, keyFieldsOf } from './analysis/analyzer.js';
 import { Library } from './library/library.js';
 import { YouTubeService } from './youtube/youtube.js';
 import { SpotifyService } from './spotify/spotify.js';
@@ -46,9 +46,13 @@ import { ReleaseNotes } from './ui/release-notes.js';
 import { CleanupUI } from './ui/cleanup-ui.js';
 import { RecStripUI } from './ui/rec-ui.js';
 import { applyTheme, themeId, DEFAULT_THEME } from './ui/theme.js';
+import { LiveSession, SessionGuard, LoadUI } from './ui/live-ui.js';
+import { LATENCY, realLatencyMs } from './live/load-core.js';
 
 const DEFAULTS = {
-  outputMode: 'auto', masterDevice: '', cueDevice: '', latency: 'normal',
+  // latency (rc.10): low = Baja · normal = Equilibrada (por defecto) · safe = Segura (live/load-core.js → LATENCY)
+  // liveMode: modo «sesión en directo» (auto = Automático, on = Siempre activado, off = Desactivado)
+  outputMode: 'auto', masterDevice: '', cueDevice: '', latency: 'normal', liveMode: 'auto',
   pitchRange: 0.08, keylockDefault: false, quantize: true, cueLoops: true, aiAutoCues: true, aiEnergyMode: 'keep', automixBars: 16, autoplay: { ...AUTOPLAY_DEFAULTS }, ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: '', syncPhase: true, autoGain: true,
   minBpm: 85, maxBpm: 175, motorStart: 4, motorStop: 4, jogSensitivity: 1,
   invertPitch: false, mc4000PhonesMidi: false, midiProfiles: {}, xfCurve: 'smooth', waveZoom: 6, waveZoomLink: true, waveZoomDecks: null, perfMode: false,
@@ -136,8 +140,9 @@ class App extends Emitter {
     this.welcome = new Welcome(this);
     document.title = 'Nexura DJ Studio' + (this.info.isBeta ? ` ${this.info.version}` : '');
 
+    if (!LATENCY[this.settings.latency]) this.settings.latency = 'normal';
     this.engine = await this.watchStep('audio', new AudioEngine().init({ latency: this.settings.latency }));
-    this.feedback.log('INFO', 'audio', `AudioContext ${this.engine.ctx.state} · ${this.engine.ctx.sampleRate} Hz · ${this.engine.ctx.destination.maxChannelCount} canales`);
+    this.feedback.log('INFO', 'audio', `AudioContext ${this.engine.ctx.state} · ${this.engine.ctx.sampleRate} Hz · ${this.engine.ctx.destination.maxChannelCount} canales · latencia ${LATENCY[this.settings.latency].label} (real ${realLatencyMs(this.engine.ctx)} ms)`);
     this.engine.ctx.addEventListener('statechange', () => this.feedback.log(this.engine.ctx.state === 'running' ? 'INFO' : 'WARN', 'audio', 'AudioContext ' + this.engine.ctx.state));
     this.engine.setXfCurve(this.settings.xfCurve);
     this.analyzer = new Analyzer();
@@ -199,11 +204,12 @@ class App extends Emitter {
     });
     // salida de audio: avisos del motor al registro técnico; dispositivo desconectado o que vuelve; audio parado
     this.engine.on('log', (level, msg) => this.feedback.log(level, 'audio', msg));
-    this.engine.on('sinkerror', (what) => toast(`No se pudo abrir el dispositivo de ${what}: revisa Ajustes → Audio`, 'warn', 6000));
-    this.engine.on('stalled', () => toast('La salida de audio no responde. Prueba otra vez a elegir el dispositivo en Ajustes → Audio', 'error', 8000, { label: 'Ajustes', fn: () => this.settingsUI.open('audio') }));
+    // (avisos críticos: se ven también en la sesión en directo)
+    this.engine.on('sinkerror', (what) => toast(`No se pudo abrir el dispositivo de ${what}: revisa Ajustes → Audio`, 'warn', 6000, null, { kind: 'critical' }));
+    this.engine.on('stalled', () => toast('La salida de audio no responde. Prueba otra vez a elegir el dispositivo en Ajustes → Audio', 'error', 8000, { label: 'Ajustes', fn: () => this.settingsUI.open('audio') }, { kind: 'critical' }));
     this.engine.on('device', (what) => {
       this.feedback.log('WARN', 'audio', what === 'lost' ? 'Se ha desconectado el dispositivo de salida elegido: suena por el predeterminado' : 'Ha vuelto el dispositivo de salida elegido');
-      toast(what === 'lost' ? 'Se ha desconectado la salida de audio elegida: suena por la predeterminada hasta que vuelva' : 'Ha vuelto la salida de audio elegida', what === 'lost' ? 'warn' : 'ok', 6000);
+      toast(what === 'lost' ? 'Se ha desconectado la salida de audio elegida: suena por la predeterminada hasta que vuelva' : 'Ha vuelto la salida de audio elegida', what === 'lost' ? 'warn' : 'ok', 6000, null, { kind: 'critical' });
       // perdido: al predeterminado (sin cambiar el ajuste); de vuelta: a él otra vez. Los decks siguen igual
       const want = this.settings.masterDevice;
       if (what === 'lost') this.settings.masterDevice = '';
@@ -224,7 +230,12 @@ class App extends Emitter {
     this.sampler.on('change', () => this.saveSamplerSoon());
 
     if (this.engine.ctx.state !== 'running') this.showStartOverlay();
-    setTimeout(() => { if (this.welcome.shouldShow()) this.welcome.open(); this.notes.check(); this.feedback.flushQueue(); }, 600);
+    // bienvenida, novedades y sugerencias pendientes: con la sesión en directo (Siempre activado), al terminarla
+    setTimeout(() => {
+      if (this.welcome.shouldShow()) this.live.defer('welcome', () => this.welcome.open());
+      this.live.defer('notes', () => this.notes.check());
+      this.live.defer('feedbackQueue', () => this.feedback.flushQueue());
+    }, 600);
     this.updatesUI = new UpdatesUI(this);
     this.statsTimer = setTimeout(() => this.sendStatsSoon(), 20000);
     this.checkRecDir().then(() => this.recStrip?.refreshDir(false));
@@ -235,9 +246,43 @@ class App extends Emitter {
     this.updateStatus();
     // guardar lo pendiente (la biblioteca se guarda de forma diferida): al cerrar la ventana lo pide main.js y
     // espera a que esté en disco; beforeunload cubre recargar la página y el modo navegador
-    this.flushAll = () => Promise.all([this.library.flush(), platform.storeSet('settings', this.settings)]);
+    // rc.10: al salir bien se marca la sesión como «cierre limpio» (si no está la marca al arrancar, la app se cerró de
+    // golpe y se ofrece recuperarla). Al recargar para aplicar la latencia no (lo recupera sin preguntar)
+    this.flushAll = () => Promise.all([this.library.flush(), platform.storeSet('settings', this.settings), this._reloading ? null : this.session.markClean()]);
     platform.onFlush(this.flushAll);
-    window.addEventListener('beforeunload', () => { this.library.flush(); platform.storeSet('settings', this.settings); });
+    window.addEventListener('beforeunload', () => { this.library.flush(); platform.storeSet('settings', this.settings); if (!this._reloading) this.session.markClean(); });
+    // recuperación tras un cierre inesperado (y la instantánea de la sesión cada 2 s)
+    this.session = new SessionGuard(this);
+    this.sessionReady = this.session.startup(location.search).catch(e => console.warn('sesión', e));
+  }
+
+  // Latencia (Ajustes → Audio). El AudioContext no deja cambiarla una vez creado: se vuelve a montar la interfaz
+  // (los temas vuelven a sus decks, en su posición y en pausa: SessionGuard). Sin música sonando, al momento;
+  // sonando, no se corta: se avisa y se aplica al pulsar «Aplicar ahora» o al terminar la sesión
+  async setLatency(v, { now = false } = {}) {
+    if (!LATENCY[v]) return false;
+    const changed = v !== this.engine.latency;
+    this.setSetting('latency', v);
+    if (!changed) { this._latencyPending = false; return false; }
+    const playing = this.live.musicPlaying() || this.automix?.enabled || this.autoplay?.enabled || this.engine.recording;
+    if (playing && !now) {
+      this._latencyPending = true;
+      this.feedback.log('INFO', 'audio', `Latencia ${LATENCY[v].label}: se aplicará al parar la música`);
+      toast(`Latencia ${LATENCY[v].label}: se aplicará cuando pares la música (para no cortarla)`, 'info', 7000, { label: 'Aplicar ya (corta el audio)', fn: () => this.setLatency(v, { now: true }) }, { kind: 'critical' });
+      if (!this._latencyWatch) this._latencyWatch = setInterval(() => {
+        if (!this._latencyPending) { clearInterval(this._latencyWatch); this._latencyWatch = null; return; }
+        if (!this.live.musicPlaying() && !this.automix?.enabled && !this.autoplay?.enabled && !this.engine.recording) { clearInterval(this._latencyWatch); this._latencyWatch = null; this.setLatency(this.settings.latency, { now: true }); }
+      }, 1500);
+      return 'pending';
+    }
+    this._latencyPending = false;
+    this.feedback.log('INFO', 'audio', `Latencia ${LATENCY[v].label}: se vuelve a montar el audio (real antes: ${realLatencyMs(this.engine.ctx)} ms)`);
+    toast(`Aplicando la latencia ${LATENCY[v].label}…`, 'info', 2500, null, { kind: 'critical' });
+    this._reloading = true;
+    // la sesión tal cual (temas, posición, pitch, loops…) para recuperarla sin preguntar tras recargar
+    await Promise.all([this.library.flush(), platform.storeSet('settings', this.settings), this.session.save({ restoreNow: true })]);
+    location.reload();
+    return 'reload';
   }
 
   // Espera un paso del arranque y, si pasa de 5 s, lo anota (registro técnico y diagnóstico de rendimiento).
@@ -301,7 +346,8 @@ class App extends Emitter {
     if (info.type === 'incluido') return toast(`Controladora ${info.model || name} detectada: perfil cargado`, 'ok', 5000);
     if (info.type !== 'ninguno') return toast(`Controladora ${name} detectada: ${info.label} (${info.custom} controles)`, 'ok', 5000);
     if ((this.settings.midiDismissed || []).includes(name)) return;
-    this.showControllerNotice(name);
+    // en plena sesión, el aviso de configurar la controladora espera al final (o a Ajustes → MIDI)
+    this.live.defer('ctl:' + name, () => this.showControllerNotice(name));
   }
   showControllerNotice(name) {
     this.ctlNotices = this.ctlNotices || new Map();
@@ -454,7 +500,10 @@ class App extends Emitter {
     this.automix.on('change', () => this.automixBtn.classList.toggle('on', this.automix.enabled));
     this.autoplayUI = new AutoplayUI(this);
     this.initFullscreen();
-    $('#top-right').append(this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.viewToggle, this.mixerToggle, this.fxToggle, this.samplerToggle, this.recBtn, this.recTime, this.outStatus, this.midiStatus,
+    // rc.10: indicador «EN DIRECTO» (modo sesión en directo) y medidor de carga del audio
+    this.live = new LiveSession(this);
+    this.loadUI = new LoadUI(this);
+    $('#top-right').append(this.live.btn, this.feedbackBtn, this.autoplayUI.ind, this.autoplayUI.topBtn, this.automixBtn, this.laptopToggle, this.viewToggle, this.mixerToggle, this.fxToggle, this.samplerToggle, this.recBtn, this.recTime, this.loadUI.pill, this.outStatus, this.midiStatus,
       this.helpBtn, this.fsBtn, btn('⚙', { cls: 'small icon', title: 'Ajustes', onClick: () => this.settingsUI.open() }), this.clock);
     $('#wave-zoom').append(
       btn('−', { cls: 'micro', title: 'Alejar la forma de onda (tecla −)', onClick: () => this.zoomWaves(1.25) }),
@@ -625,7 +674,8 @@ class App extends Emitter {
     // refresco de la pantalla, medido entre dos callbacks seguidos (sin dormir en medio)
     if (this._direct && dt > 2 && dt < 50) this._vsync = this._vsync ? this._vsync * 0.9 + dt * 0.1 : dt;
     this.perfDiag?.tick(ts);
-    const vs = this._vsync || 1000 / 60, iv = 1000 / (this.settings.perfMode ? 30 : 60);
+    // rc.10: con el audio al límite (medidor de carga) las ondas bajan a 30 fps (20 en «Modo rendimiento») hasta que pase
+    const vs = this._vsync || 1000 / 60, iv = 1000 / (this.loadReduced ? (this.settings.perfMode ? 20 : 30) : (this.settings.perfMode ? 30 : 60));
     if (ts - (this._lastRender || 0) < iv - vs / 2) { this._direct = true; next(); return; }
     this._lastRender = ts;
     this.perfDiag?.beginFrame();
@@ -754,7 +804,7 @@ class App extends Emitter {
     const fresh = added.filter(t => !before.has(t.id));
     toast(`${countTracks(added.length)} ${crateId ? `en «${this.libraryUI.crateLabel(this.library.crate(crateId))}»` : 'en la biblioteca'}${fresh.length && fresh.length < added.length ? ` (${fresh.length} nuevas)` : ''}`, 'ok');
     const todo = fresh.filter(t => !t.analyzed);
-    if (todo.length && this.settings.autoAnalyze) this.analyzeMany(todo);
+    if (todo.length && this.settings.autoAnalyze) this.analyzeMany(todo, false, { auto: true });
     return added;
   }
 
@@ -888,12 +938,17 @@ class App extends Emitter {
     // beatgrid de una versión anterior del análisis (y BPM no fijado a mano): se recalcula con el audio que ya
     // está decodificado; mientras tanto la pista suena con el grid de antes
     const regrid = needsGrid(t);
-    if (!t.analyzed || !wave || regrid) {
+    // tonalidad de la versión anterior del análisis (y no fijada a mano): también se recalcula, salvo con el audio
+    // al límite (medidor de carga): entonces espera a la próxima carga o a «Analizar»
+    const rekey = needsKey(t) && !this.loadMeter?.overloaded;
+    if (!t.analyzed || !wave || regrid || rekey) {
+      // solo falta la tonalidad nueva: del análisis se toma solo la tonalidad (BPM, grid, cues y estructura no se tocan)
+      const keyOnly = t.analyzed && wave && !regrid;
       try {
         const meta = await this.analyzer.analyzeTrack(t, buf, { minBpm: this.settings.minBpm, maxBpm: this.settings.maxBpm });
-        this.library.update(t.id, meta);
+        this.library.update(t.id, keyOnly ? keyFieldsOf(meta) : meta);
         if (regrid && d.track === t) toast(`Beatgrid de «${t.title}» recalculado con el análisis nuevo: ${(+t.bpm).toFixed(2)} BPM`, 'info', 3500);
-        await this.applyAutoCues(t);
+        if (!keyOnly) await this.applyAutoCues(t);
         wave = await this.analyzer.getWave(t.id);
       } catch (e) { console.error(e); toast('Error al analizar: ' + e.message, 'error'); }
     }
@@ -1012,7 +1067,7 @@ class App extends Emitter {
       el('p', {}, `${n} pistas importadas (${fresh.length} nuevas en tu biblioteca) y ${crates} listas como crates.${opt.fileMarkers ? ` ${fromFiles} archivos tenían cues o beatgrid guardados.` : ''}`),
       missing ? el('p', { class: 'set-note' }, `${missing} archivos no se encontraron en este equipo (movidos, borrados o en otro disco); se han omitido.`) : null,
       fresh.length ? el('p', { class: 'set-note' }, 'Las pistas nuevas se analizarán para la forma de onda conservando el BPM, el beatgrid y la tonalidad importados.') : null));
-    if (fresh.length && this.settings.autoAnalyze) this.analyzeMany(fresh);
+    if (fresh.length && this.settings.autoAnalyze) this.analyzeMany(fresh, false, { auto: true });
     return { n, crates, missing, fromFiles };
   }
 
@@ -1056,30 +1111,46 @@ class App extends Emitter {
     return this.analyzer.analyzeTrack(t, buf, opts, true);
   }
 
-  async analyzeMany(tracks, force = false) {
-    // sin «force»: pistas sin analizar y las analizadas con una versión antigua (sin estructura/energía de la IA o
-    // con el beatgrid antiguo); se respetan el BPM y la tonalidad bloqueados por el usuario
+  // ¿Hay que esperar antes de analizar la siguiente pista del lote? Con el audio al límite (medidor de carga),
+  // siempre; en plena sesión en directo, si el análisis no lo ha pedido el usuario (el de después de importar)
+  analysisHold(auto) { return !!(this.loadMeter?.overloaded || (auto && this.live?.active)); }
+
+  async analyzeMany(tracks, force = false, { auto = false } = {}) {
+    // sin «force»: pistas sin analizar y las analizadas con una versión antigua (sin estructura/energía de la IA,
+    // con el beatgrid o la tonalidad antiguos); se respetan el BPM y la tonalidad bloqueados por el usuario
     // «Volver a analizar» desbloquea BPM y tonalidad: no se permite con la biblioteca protegida
+    // auto: lo lanza la app al importar (autoAnalyze), no el usuario
     if (force && !this.library.guard('grid')) return;
-    const list = tracks.filter(t => t.source === 'local' && (force || !t.analyzed || t.sections === undefined || needsGrid(t)));
+    const list = tracks.filter(t => t.source === 'local' && (force || !t.analyzed || t.sections === undefined || needsGrid(t) || needsKey(t)));
     if (!list.length) return toast('No hay pistas pendientes de análisis', 'info');
     if (this.analyzing) return toast('Ya hay un análisis en curso', 'warn');
     this.analyzing = true;
     const status = $('#lib-status');
     let n = 0;
+    let held = false;
     for (const t of list) {
+      // en pausa mientras el audio va al límite (o durante la sesión, si lo lanzó la app): sigue al pasar
+      while (this.analysisHold(auto)) {
+        if (!held) { held = true; this.feedback.log('INFO', 'analisis', `Análisis en segundo plano en pausa (${this.loadMeter?.overloaded ? 'audio al límite' : 'sesión en directo'})`); }
+        status.textContent = `Análisis en pausa (${n}/${list.length}): ${this.loadMeter?.overloaded ? 'el audio va al límite' : 'sesión en directo'}; sigue solo al terminar`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (held) { held = false; this.feedback.log('INFO', 'analisis', 'El análisis en segundo plano sigue'); }
       status.textContent = `Analizando ${++n}/${list.length}: ${t.title}`;
       try {
         if (force) this.library.update(t.id, { bpmLocked: false, keyLocked: false, grid: null });
-        this.library.update(t.id, await this.analyzeOne(t));
-        await this.applyAutoCues(t);
+        // solo le falta la tonalidad nueva (rc.10): se actualiza solo la tonalidad
+        const keyOnly = !force && t.analyzed && t.sections !== undefined && !needsGrid(t) && needsKey(t);
+        const meta = await this.analyzeOne(t);
+        this.library.update(t.id, keyOnly ? keyFieldsOf(meta) : meta);
+        if (!keyOnly) await this.applyAutoCues(t);
       } catch (e) { console.warn('análisis', t.path, e); }
       // entre pista y pista se deja dibujar al menos un frame (con la ventana minimizada no hay frames: 100 ms)
       await new Promise(r => { const t = setTimeout(r, 100); requestAnimationFrame(() => setTimeout(() => { clearTimeout(t); r(); }, 0)); });
     }
     status.textContent = '';
     this.analyzing = false;
-    toast(`Análisis completado (${list.length} pistas)`, 'ok');
+    toast(`Análisis completado (${list.length} pistas)`, 'ok', 3500, null, auto ? { kind: 'bg' } : null);
   }
 
   async addFiles(folder) {
@@ -1094,7 +1165,7 @@ class App extends Emitter {
     if (!infos || !infos.length) return [];
     const added = this.library.addFiles(infos, crate);
     toast(`${added.length} pistas añadidas`, 'ok');
-    if (this.settings.autoAnalyze) this.analyzeMany(added);
+    if (this.settings.autoAnalyze) this.analyzeMany(added, false, { auto: true });
     return added;
   }
   async importDropped(fileList, crateId = null) {
@@ -1102,7 +1173,7 @@ class App extends Emitter {
     if (!infos.length) { toast('No se encontraron archivos de audio compatibles', 'warn'); return []; }
     const added = this.library.addFiles(infos, crateId);
     toast(`${added.length} pistas añadidas`, 'ok');
-    if (this.settings.autoAnalyze) this.analyzeMany(added);
+    if (this.settings.autoAnalyze) this.analyzeMany(added, false, { auto: true });
     return added;
   }
   // Árbol de carpetas ({ files, dirs }, ver library/folder-crates.js) sobre «target»: undefined = solo a la
@@ -1119,7 +1190,7 @@ class App extends Emitter {
     if (target && L.crate(target)) this.libraryUI.expandCrate(target);
     const where = top.length === 1 ? ` en «${this.libraryUI.crateLabel(top[0])}»` : '';
     toast(`${tracks.length} pistas añadidas${where}` + (created.length ? ` · ${created.length} crate(s) nuevas` : '') + (res.blocked ? ' (solo a la biblioteca: está protegida)' : ''), 'ok');
-    if (this.settings.autoAnalyze) this.analyzeMany(tracks);
+    if (this.settings.autoAnalyze) this.analyzeMany(tracks, false, { auto: true });
     return tracks;
   }
 
@@ -1181,7 +1252,7 @@ class App extends Emitter {
     if (crate) { this.libraryUI.expandCrate(crate.id); this.libraryUI.setView('crate:' + crate.id); }
     const msg = `${found} pista(s) importadas${crate ? ` en la crate «${this.libraryUI.crateLabel(crate)}»` : ''}` + (missing ? ` · ${missing} no se encontraron en este equipo` : '');
     toast(msg, missing ? 'warn' : 'ok', missing ? 7000 : 4000);
-    if (fresh.length && this.settings.autoAnalyze) this.analyzeMany(fresh);
+    if (fresh.length && this.settings.autoAnalyze) this.analyzeMany(fresh, false, { auto: true });
     return { found, missing, crate };
   }
 
@@ -1275,17 +1346,42 @@ class App extends Emitter {
       // nombre de la mezcla (franja de grabación) + fecha y hora, para no sobrescribir una grabación anterior
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const name = (this.recStrip?.mixName() || 'Nexura-set') + '-' + stamp;
-      const { file, fallback } = await platform.saveRecording(wav, name, this.settings.recDir || '');
+      // rc.10: si no se puede guardar (disco lleno, carpeta sin permiso…) la grabación no se pierde: se avisa siempre
+      // (también en directo) y se ofrece guardarla en otra carpeta
+      let file, fallback;
+      try { ({ file, fallback } = await platform.saveRecording(wav, name, this.settings.recDir || '')); }
+      catch (e) {
+        this.pendingRec = { wav, name };
+        this.feedback.log('ERROR', 'grabacion', 'No se pudo guardar la grabación: ' + ((e && e.message) || e));
+        toast(`No se pudo guardar la grabación${/ENOSPC|space|espacio/i.test(String(e && e.message)) ? ': el disco está lleno' : ''}. No cierres la app: elige otra carpeta para guardarla`, 'error', 20000,
+          { label: 'Guardar en otra carpeta…', fn: () => this.retryRecSave() }, { kind: 'critical' });
+        this.updateStatus(); this.recStrip?.refresh();
+        return;
+      }
       if (fallback) {
         toast(`La carpeta de grabación elegida ${fallback === 'missing' ? 'ya no existe' : 'no admite escritura'}: la grabación se ha guardado en la de siempre (${file}). Cámbiala con «Cambiar…».`, 'warn', 12000,
           { label: 'Cambiar…', fn: () => this.chooseRecDir() });
         this.recDirProblem = fallback;
       } else toast('Grabación guardada: ' + file, 'ok', 7000);
       this.lastRecording = file;
-      if (isDesktop) platform.showItem(file);
+      // en plena sesión no se abre el explorador encima (se puede abrir luego con «Abrir carpeta»)
+      if (isDesktop && !this.live?.active) platform.showItem(file);
     }
     this.updateStatus();
     this.recStrip?.refresh();
+  }
+  // Grabación que no se pudo guardar: otra carpeta y otra vez
+  async retryRecSave() {
+    const p = this.pendingRec;
+    if (!p) return;
+    await this.chooseRecDir();
+    try {
+      const { file } = await platform.saveRecording(p.wav, p.name, this.settings.recDir || '');
+      this.pendingRec = null; this.lastRecording = file;
+      toast('Grabación guardada: ' + file, 'ok', 7000, null, { kind: 'critical' });
+    } catch (e) {
+      toast('Tampoco se ha podido guardar ahí. Prueba con otra carpeta u otro disco', 'error', 20000, { label: 'Guardar en otra carpeta…', fn: () => this.retryRecSave() }, { kind: 'critical' });
+    }
   }
   // Carpeta de grabación: la elegida (settings.recDir) o la de siempre (Música › Nexura DJ Studio › Grabaciones)
   recFolder() { return this.settings.recDir || this.info.recordings || ''; }

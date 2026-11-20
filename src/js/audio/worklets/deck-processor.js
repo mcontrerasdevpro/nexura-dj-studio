@@ -110,9 +110,21 @@ function hermite(buf, pos, len) {
   return ((c3 * f + c2) * f + c1) * f + x0;
 }
 
+// Reloj del medidor de carga (ver process)
+const CLOCK = (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') ? () => performance.now() : () => Date.now();
+// (solo pruebas) ocupar el hilo de audio `ms` milisegundos con cálculo: el reloj del hilo de audio puede ser de 1 ms,
+// así que se calibra una vez cuántas vueltas caben en un milisegundo
+let BURN_PER_MS = 0, burnSink = 0;
+function burnLoop(n) { let x = burnSink; for (let i = 0; i < n; i++) x = (x * 1.0000001 + 0.5) % 1000; burnSink = x; }
+function burnFor(ms) {
+  if (!BURN_PER_MS) { const t0 = Date.now(); let n = 0; while (Date.now() - t0 < 20) { burnLoop(10000); n += 10000; } BURN_PER_MS = n / Math.max(1, Date.now() - t0); }
+  burnLoop(Math.round(BURN_PER_MS * ms));
+}
+
 class DeckProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    this.loadBusy = 0; this.loadFrames = 0; this.burn = 0;
     this.L = null; this.R = null; this.len = 0; this.ratio = 1;
     this.pos = 0;            // posición en muestras del buffer
     this.playing = false;
@@ -232,6 +244,7 @@ class DeckProcessor extends AudioWorkletProcessor {
       case 'keylock': this.keylock = !!m.v; break;
       case 'semis': this.semis = m.v; break;
       case 'motor': this.startT = Math.max(0.002, m.start); this.stopT = Math.max(0.002, m.stop); break;
+      case 'burn': this.burn = Math.max(0, Math.min(50, +m.v || 0)); break;
     }
   }
 
@@ -258,7 +271,25 @@ class DeckProcessor extends AudioWorkletProcessor {
     else { o[0] = hermite(this.L, pos, this.len); o[1] = hermite(this.R, pos, this.len); o[2] = 0; o[3] = 0; }
   }
 
-  process(_inputs, outputs) {
+  // rc.10: medidor de carga. Se mide cuánto tarda cada bloque (process) frente a lo que dura su audio y se manda a
+  // la interfaz cada ~0,5 s de audio ({ t: 'load', busy, audio } en ms). Con performance.now() si el hilo de
+  // audio lo tiene; si no, con Date.now() (1 ms de resolución: sumando miles de bloques la media sale bien igual,
+  // porque cada bloque tiene la misma probabilidad de «cruzar» un milisegundo que su duración).
+  // `burn` (solo pruebas): ocupa el hilo de audio esos ms en cada bloque para simular un equipo saturado.
+  process(inputs, outputs) {
+    const t0 = CLOCK();
+    const r = this.render(inputs, outputs);
+    if (this.burn > 0) burnFor(this.burn);
+    this.loadBusy += CLOCK() - t0;
+    this.loadFrames += outputs[0][0].length;
+    if (this.loadFrames >= sampleRate / 2) {
+      this.port.postMessage({ t: 'load', busy: this.loadBusy, audio: this.loadFrames / sampleRate * 1000 });
+      this.loadBusy = 0; this.loadFrames = 0;
+    }
+    return r;
+  }
+
+  render(_inputs, outputs) {
     const out = outputs[0];
     const oL = out[0], oR = out[1] || out[0];
     const n = oL.length;

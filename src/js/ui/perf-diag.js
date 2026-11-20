@@ -51,6 +51,12 @@ export class PerfDiag {
     if (this.open) this.closeFreeze(now);
   }
 
+  // fps de la onda en los últimos ~10-20 s (bloque actual y el anterior), para el medidor de carga
+  fpsNow() {
+    const b = [this.buckets[this.buckets.length - 1], this.cur].filter(Boolean);
+    const ms = b.reduce((s, x) => s + x.ms, 0), draws = b.reduce((s, x) => s + x.draws, 0);
+    return ms > 500 ? Math.round(draws / (ms / 1000)) : 0;
+  }
   get gpuActive() { const g = this.app.info?.gpu; return !!(g && g.canvas2d && !this.app.info.gpuOff); }
   check() {
     const now = performance.now(), late = now - this.lastCheck - 500;
@@ -83,8 +89,11 @@ export class PerfDiag {
     // arranque: estado de MIDI (y cuánto tardó o cuántas veces no respondió) y pasos que tardaron más de 5 s
     const st = this.app.startup || {};
     const startup = { midi: st.midi || '', midiMs: st.midiMs ?? null, midiTimeouts: st.midiTimeouts || 0, outputs: st.outputs || '', slow: (st.slow || []).map(x => ({ step: x.step, ms: x.ms, done: !!x.done })) };
+    // rc.10: audio (latencia elegida y real, carga y cortes: live/load-core.js)
+    const ctx = this.app.engine?.ctx;
+    const audio = { latency: s.latency || 'normal', realMs: ctx ? Math.round(((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 10000) / 10 : null, sampleRate: ctx ? ctx.sampleRate : null, live: !!this.app.live?.active, load: this.app.loadMeter ? this.app.loadMeter.snapshot() : null };
     return {
-      startup,
+      startup, audio,
       tracks: this.app.library ? this.app.library.tracks.size : 0, perfMode: !!s.perfMode, fpsTarget: s.perfMode ? 30 : 60, layout: this.app.waveLayout || '',
       windowMin: Math.round(ms / 6000) / 10, fps: ms ? Math.round(sum('draws') / (ms / 1000) * 10) / 10 : 0, fpsPlaying: playMs ? Math.round(sum('playDraws') / (playMs / 1000) * 10) / 10 : 0,
       longTasks: sum('longN'), longMaxMs: Math.round(max('longMax')), stalls: sum('stallN'), stallMaxMs: Math.round(max('stallMax')),

@@ -8,6 +8,8 @@ import { platform } from '../platform.js';
 import { STATS_FIELDS_TEXT } from './legal-ui.js';
 import { CRATE_SORTS } from '../library/library.js';
 import { THEMES } from './theme.js';
+import { LIVE_MODES } from '../live/live-core.js';
+import { LATENCY, realLatencyMs } from '../live/load-core.js';
 
 const TABS = { general: 'General', audio: 'Audio', ai: '✨ IA', play: 'Reproducción', library: 'Biblioteca', midi: 'MIDI / Controladores', expansions: 'Expansiones', youtube: 'YouTube', spotify: 'Spotify', keys: 'Atajos', about: 'Acerca de' };
 const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
@@ -156,8 +158,8 @@ export class SettingsUI {
       s.outputMode === 'external' ? el('p', { class: 'hint ok' }, 'Mesa externa: cada deck sale sin mezclar a su propio canal de tu mesa. Con una interfaz de 4 salidas: Deck 1 (y el sampler) → salidas 1/2 y Deck 2 → salidas 3/4. Con dos tarjetas: Deck 1 por el «dispositivo master» y Deck 2 por el «segundo dispositivo». Con una sola salida estéreo: Deck 1 por la izquierda y Deck 2 por la derecha (en mono, con un cable en Y). El EQ, el filtro, los faders, el crossfader y el cue se manejan en la mesa; los efectos, el pitch y los loops siguen funcionando aquí. Las pistas de YouTube y la grabación interna no pasan por este modo.') : null,
       this.row('Dispositivo master', select(opts, s.masterDevice, (v) => { app.setSetting('masterDevice', v); app.applyOutputs().then(() => this.render()); }), s.outputMode === 'external' ? 'Deck 1' : null),
       this.row(s.outputMode === 'external' ? 'Segundo dispositivo (Deck 2)' : 'Dispositivo de auriculares', select(opts, s.cueDevice, (v) => { app.setSetting('cueDevice', v); app.applyOutputs().then(() => this.render()); }), s.outputMode === 'external' ? 'Solo si no usas una interfaz de 4 salidas' : 'Solo para el modo «dispositivos separados»'),
-      this.row('Latencia', select({ low: 'Baja (5 ms)', normal: 'Normal', safe: 'Segura' }, s.latency, (v) => { app.setSetting('latency', v); toast('Reinicia la aplicación para aplicar la latencia', 'info'); })),
-      el('p', { class: 'hint', id: 'set-out-now' }, `Modo actual: ${app.outputDesc || '—'} · Canales del dispositivo: ${app.engine.ctx.destination.maxChannelCount} · Frecuencia: ${app.engine.ctx.sampleRate} Hz · Latencia: ${Math.round((app.engine.ctx.baseLatency + (app.engine.ctx.outputLatency || 0)) * 1000)} ms`),
+      ...this.latencyRows(),
+      el('p', { class: 'hint', id: 'set-out-now' }, `Modo actual: ${app.outputDesc || '—'} · Canales del dispositivo: ${app.engine.ctx.destination.maxChannelCount} · Frecuencia: ${app.engine.ctx.sampleRate} Hz · Latencia real: ${realLatencyMs(app.engine.ctx)} ms`),
       el('p', { class: 'hint', id: 'set-sinks' }, 'Salidas abiertas: ' + app.engine.sinkReport()),
       el('h3', {}, 'Rendimiento'),
       this.row('Modo rendimiento', Object.assign(this.toggle('perfMode'), { id: 'set-perf-mode' }), 'Para equipos justos o portátiles con batería: la forma de onda se dibuja a 30 fps regulares (normalmente a 60), sin animaciones ni brillos. El audio no cambia'),
@@ -165,6 +167,22 @@ export class SettingsUI {
       el('h3', {}, 'Grabación'),
       ...this.recDirRows(),
       btn('Probar salida (tono 1 s)', { cls: 'small', onClick: () => this.testTone() })].filter(Boolean));
+  }
+  // Latencia (rc.10): Baja / Equilibrada / Segura, con la latencia real medida (baseLatency + outputLatency).
+  // Se aplica al momento si no suena nada (la interfaz se vuelve a montar con los temas en su sitio y en pausa); con
+  // música sonando, al pararla o con «Aplicar ya» (app.setLatency). Nunca en silencio: siempre hay un aviso
+  latencyRows() {
+    const app = this.app, s = app.settings, ctx = app.engine.ctx;
+    const cur = LATENCY[s.latency] ? s.latency : 'normal';
+    const sel = select({ low: 'Baja · para scratch y controladora', normal: 'Equilibrada (recomendada)', safe: 'Segura · equipos lentos o portátiles' }, cur, async (v) => {
+      const r = await app.setLatency(v);
+      if (r === 'pending') state.textContent = `Se aplicará al parar la música · ahora ${realLatencyMs(ctx)} ms reales`;
+    });
+    sel.id = 'set-latency';
+    const pending = app.engine.latency !== cur;
+    const state = el('small', { id: 'set-latency-real', class: 'lat-real' }, `${pending ? `Pendiente de aplicar (ahora ${LATENCY[app.engine.latency]?.label || '?'})` : 'Aplicada'} · latencia real medida: ${realLatencyMs(ctx)} ms (base ${Math.round((ctx.baseLatency || 0) * 10000) / 10} + salida ${Math.round((ctx.outputLatency || 0) * 10000) / 10})`);
+    return [this.row('Latencia', el('div', { class: 'set-inline lat-box' }, sel, state),
+      'Tiempo entre que tocas un control y lo oyes. Baja: lo más rápido que permite el equipo, para scratch. Equilibrada: un poco de margen, sin que se note al pinchar. Segura: ~45 ms, para que un equipo lento no corte el audio con dos decks y análisis a la vez. Si el medidor «CPU» de la barra superior marca cortes, sube a Segura. Al cambiarla se vuelve a montar el audio (1-2 s): los temas quedan en su sitio, en pausa; con música sonando se espera a que la pares')];
   }
   // Carpeta de grabación: la de siempre o la elegida con «Cambiar…» (también en la franja de grabación)
   recDirRows() {
@@ -265,6 +283,9 @@ export class SettingsUI {
   page_play(p) {
     const app = this.app, s = app.settings;
     p.append(
+      el('h3', { id: 'set-live-head' }, 'Sesión en directo'),
+      this.row('Modo sesión en directo', Object.assign(select(LIVE_MODES, LIVE_MODES[s.liveMode] ? s.liveMode : 'auto', (v) => app.setSetting('liveMode', v)), { id: 'set-live-mode' }),
+        'Mientras pinchas, la app no interrumpe: ni avisos de actualización, ni ventanas, ni análisis pesados que no hayas pedido; lo que no es urgente espera al final de la sesión. Los avisos importantes (salida de audio perdida, cortes, disco lleno al grabar, carga sobre el deck que suena) se ven siempre. Automático: se activa cuando suena un deck al aire o con Automix, Autoplay o REC, y termina 2 minutos después de que deje de sonar todo. También lo enciendes o apagas con «EN DIRECTO» en la barra superior. Al cerrar la ventana con música sonando, siempre se pregunta antes'),
       el('h3', { id: 'set-load-head' }, 'Al cargar un tema'),
       this.row('Proteger el deck que suena al cargar', Object.assign(select({ block: 'Bloquear y avisar (recomendado)', warn: 'Solo avisar', off: 'Desactivado' }, s.loadProtect || 'block', (v) => app.setSetting('loadProtect', v)), { id: 'set-load-protect' }),
         'Si el deck suena al aire (fader arriba y crossfader abierto en su lado), cargar otro tema cortaría la música. Bloquear: no carga y avisa; para forzarlo, «Cargar igualmente» o repite la carga antes de 2 s (también desde la controladora). Con el fader bajado o el crossfader cerrado se carga sin aviso. El Automix y el Autoplay cargan sin aviso'),

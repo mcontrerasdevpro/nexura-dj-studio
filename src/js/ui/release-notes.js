@@ -28,7 +28,7 @@ export class ReleaseNotes {
     if (s.lastVersion !== v) app.setSetting('lastVersion', v);
     if (!announce) return false;
     app.feedback && app.feedback.log('INFO', 'app', `Actualizada desde ${s.lastVersion || 'una versión anterior'}`);
-    toast(`Nexura se ha actualizado a la ${v}`, 'ok upd-notes', 20000, { label: 'Ver novedades', fn: () => this.show(v) });
+    toast(`Nexura se ha actualizado a la ${v}`, 'ok upd-notes', 20000, { label: 'Ver novedades', fn: () => this.show(v) }, { kind: 'bg' });
     return true;
   }
 

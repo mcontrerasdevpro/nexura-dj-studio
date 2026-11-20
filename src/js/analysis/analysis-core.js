@@ -1,5 +1,7 @@
 // Núcleo de análisis (funciones puras): forma de onda por bandas, BPM + fase
-// del beatgrid y tonalidad (perfiles de Krumhansl-Kessler → Camelot).
+// del beatgrid y tonalidad (rc.10: key-core.js; detectKey es el detector de rc.9, solo para comparar).
+import { keyFromDecimated, KEY_VERSION } from './key-core.js';
+export { analyzeKey, KEY_VERSION } from './key-core.js';
 
 const FFT_CACHE = new Map();
 function fftTables(n) {
@@ -773,7 +775,8 @@ export function analyze(mono, sr, opts = {}) {
   }
   if (bpm && opts.latencyComp) firstBeat += opts.latencyComp;
   if (grid && opts.latencyComp) grid = grid.map(m => ({ t: m.t + opts.latencyComp, bpm: m.bpm }));
-  const key = detectKey(d, sr2);
+  // rc.10: detector nuevo (key-core.js); detectKey (rc.9) queda para comparar en las pruebas
+  const key = keyFromDecimated(d, sr2);
   let struct = { energy: null, sections: [] };
   const sBpm = opts.lockedBpm || bpm, sFirst = opts.lockedBpm ? (opts.lockedFirstBeat || 0) : firstBeat;
   const trackRms = rmsDb(mono);
@@ -781,7 +784,7 @@ export function analyze(mono, sr, opts = {}) {
   return {
     bpm, firstBeat, grid, gridFit,
     energy: struct.energy, sections: struct.sections, energyCurve: struct.curve || null,
-    keyTonic: key ? key.tonic : null, keyMinor: key ? key.minor : null,
+    keyTonic: key ? key.tonic : null, keyMinor: key ? key.minor : null, keyV: KEY_VERSION, keyConf: key && key.conf != null ? Math.round(key.conf * 100) / 100 : null,
     rmsDb: trackRms, energyV: struct.energyV || null,
     wave: wave.data, waveRate: wave.rate
   };

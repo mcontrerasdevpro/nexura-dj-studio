@@ -65,8 +65,33 @@ function perfInfo(perf, anon = {}) {
     windowMin: num(a.windowMin, 1e4), fps: num(a.fps, 1000), fpsPlaying: num(a.fpsPlaying, 1000),
     longTasks: num(a.longTasks), longMaxMs: num(a.longMaxMs), stalls: num(a.stalls), stallMaxMs: num(a.stallMaxMs),
     freezes: (Array.isArray(a.freezes) ? a.freezes : []).slice(-10).map(f => ({ minAgo: num(f.minAgo, 1e5), ms: num(f.ms, 1e7), kind: f.kind === 'gpu' ? 'gpu' : 'hilo', gpu: !!f.gpu })),
-    startup: startupInfo(a.startup)
+    startup: startupInfo(a.startup),
+    audio: audioInfo(a.audio)
   };
+}
+// rc.10: latencia elegida y real, carga del audio (actual y máxima), cortes y cuándo, y momentos «al límite»
+const LAT = ['low', 'normal', 'safe'];
+function audioInfo(x) {
+  if (!x || typeof x !== 'object') return null;
+  const l = x.load || {};
+  return {
+    latency: LAT.includes(x.latency) ? x.latency : '', realMs: num(x.realMs, 1e4), sampleRate: num(x.sampleRate, 1e6), live: !!x.live,
+    loadPct: num(l.loadPct, 1e4), peakPct: num(l.peakPct, 1e4), peakMinAgo: l.peakMinAgo == null ? null : num(l.peakMinAgo, 1e5),
+    glitches: num(l.glitches, 1e6) || 0, glitchesLastMin: num(l.glitchesLastMin, 1e6) || 0,
+    glitchTimes: (Array.isArray(l.glitchTimes) ? l.glitchTimes : []).slice(-10).map(g => ({ minAgo: num(g.minAgo, 1e5), ms: g.ms == null ? null : num(g.ms, 1e6) })),
+    events: (Array.isArray(l.events) ? l.events : []).slice(-8).map(e => ({ minAgo: num(e.minAgo, 1e5), on: !!e.on, load: num(e.load, 1e4), cause: e.cause === 'cortes' ? 'cortes' : 'carga' }))
+  };
+}
+const LAT_TEXT = { low: 'Baja', normal: 'Equilibrada', safe: 'Segura' };
+function audioText(a) {
+  if (!a) return [];
+  const cuts = a.glitches ? `${a.glitches} (${a.glitchTimes.map(g => `hace ${g.minAgo} min${g.ms != null ? `, ${g.ms} ms` : ''}`).join(' · ')})` : 'ninguno';
+  const ev = a.events.length ? a.events.map(e => `${e.on ? 'al límite' : 'normal'} hace ${e.minAgo} min (${e.cause}, ${e.load} %)`).join(' · ') : 'nunca al límite';
+  return [
+    `Audio: latencia ${LAT_TEXT[a.latency] || '?'} · real ${a.realMs} ms · ${a.sampleRate} Hz · sesión en directo ${a.live ? 'sí' : 'no'}`,
+    `Carga del audio: ahora ${a.loadPct} % · máxima ${a.peakPct} %${a.peakMinAgo != null ? ` (hace ${a.peakMinAgo} min)` : ''} · cortes detectados: ${cuts}`,
+    `Estado del audio: ${ev}`
+  ];
 }
 // Arranque (app.startup en la interfaz): estado de MIDI y pasos lentos. Solo valores de listas cerradas
 const MIDI_STATES = ['init', 'waiting', 'ok', 'denied', 'unsupported', 'timeout'];
@@ -97,7 +122,8 @@ function perfText(p) {
     `Biblioteca: ${p.tracks} pistas · modo rendimiento ${yes(p.perfMode)} (objetivo ${p.fpsTarget} fps) · vista de onda ${p.layout}`,
     `Últimos ${p.windowMin} min: onda ${p.fps} fps de media (${p.fpsPlaying} fps sonando) · tareas largas ${p.longTasks} (máx. ${p.longMaxMs} ms) · bloqueos de más de 100 ms ${p.stalls} (máx. ${p.stallMaxMs} ms)`,
     `Congelaciones de la onda: ${p.freezes.length ? p.freezes.map(f => `hace ${f.minAgo} min, ${f.ms} ms (${f.kind === 'gpu' ? 'sin dibujar con el hilo libre' : 'hilo ocupado'}${f.gpu ? ', GPU activa' : ''})`).join(' · ') : 'ninguna'}`,
-    ...startupText(p.startup)
+    ...startupText(p.startup),
+    ...audioText(p.audio)
   ];
 }
 

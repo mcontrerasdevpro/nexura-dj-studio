@@ -1661,3 +1661,48 @@ html body.view-lib .deck .bend-mix { display: none; }
   .bend-lbl { font-size: 7.5px; line-height: 9px; }
   .btn.bend-btn { height: 20px; font-size: 13px; }
 }
+
+
+/* 19. rc.10: sesión en directo, recuperación y medidor de carga ---------------------------------------- */
+/* «EN DIRECTO» en la barra superior: apagado = discreto; encendido = rojo con un punto que late */
+.btn.live-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 700; letter-spacing: .04em; color: var(--muted); }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line2); flex: none; }
+.btn.live-btn.on { color: #fff; background: color-mix(in srgb, var(--err) 30%, var(--panel3)); border-color: var(--err); }
+.btn.live-btn.on .live-dot { background: var(--err); box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 70%, transparent); animation: live-pulse 1.6s ease-out infinite; }
+@keyframes live-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 70%, transparent); } 80%, 100% { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) { .btn.live-btn.on .live-dot { animation: none; } }
+/* en directo los avisos son más pequeños y quedan abajo a la derecha, lejos de CUE/PLAY */
+body.live-on .toast { max-width: 340px; padding: 6px 10px; font-size: 12px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
+body.live-on #toasts { bottom: 24px; right: 12px; }
+.toast.critical { border-left-width: 4px; }
+/* medidor de carga: verde / ámbar / rojo */
+.status-pill.load-pill { font-family: var(--mono); font-variant-numeric: tabular-nums; min-width: 72px; text-align: center; }
+.status-pill.load-pill.green { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.status-pill.load-pill.amber { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.status-pill.load-pill.red { color: #fff; background: color-mix(in srgb, var(--err) 35%, var(--panel2)); border-color: var(--err); }
+.load-pop { position: fixed; z-index: 450; width: 320px; padding: 9px 11px 8px; background: var(--panel3); border: 1px solid var(--line2); border-radius: 6px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); font-size: 12px; color: var(--text); pointer-events: none; }
+.load-pop .lp-title { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.load-pop .lp-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.load-pop .lp-row span { color: var(--muted); }
+.load-pop .lp-row b { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.load-pop .lp-row.warn b { color: var(--warn); }
+.load-pop .lp-row.bad b { color: var(--err); }
+.load-pop .lp-hint { margin: 6px 0 0; font-size: 11px; color: var(--muted); line-height: 1.35; }
+/* aviso de cortes: discreto, abajo a la izquierda (encima de la barra lateral), sin tapar los decks */
+.load-notice { position: fixed; left: 16px; bottom: 32px; z-index: 310; display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); padding: 7px 8px 7px 12px; background: var(--panel3); border: 1px solid var(--line2); border-left: 3px solid var(--err); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 12.5px; color: var(--text); }
+.load-notice small { color: var(--muted); }
+body:has(.midi-notice) .load-notice { bottom: 76px; }
+/* recuperar la sesión: tarjeta abajo en el centro (sobre la biblioteca), no tapa los decks */
+.recover-card { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 320; display: flex; align-items: center; gap: 14px; width: min(640px, calc(100vw - 32px)); padding: 11px 12px 11px 14px; background: var(--panel3); border: 1px solid var(--warn); border-left: 4px solid var(--warn); border-radius: 7px; box-shadow: 0 14px 40px rgba(0, 0, 0, .6); font-size: 12.5px; color: var(--text); }
+.recover-card .rc-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.recover-card .rc-text b { font-size: 13.5px; color: #ffd28a; }
+.recover-card .rc-text span { color: var(--muted); }
+.recover-card .rc-actions { display: flex; gap: 6px; flex: none; }
+@media (max-width: 760px) { .recover-card { flex-direction: column; align-items: stretch; } }
+.lat-box .lat-real { color: var(--muted); }
+
+/* barra superior estrecha: «● DIRECTO» y el medidor sin ancho mínimo (el tooltip lo explica todo) */
+@media (max-width: 1500px) { .btn.live-btn .live-en { display: none; } .btn.live-btn { gap: 5px; padding-inline: 7px; } .status-pill.load-pill { min-width: 0; padding-inline: 7px; } }
+@media (max-width: 1400px) { #top-right { gap: 3px; } #top-right .btn.small { padding-inline: 5px; } #top-right .status-pill { padding-inline: 6px; } }
+#top-right .status-pill.load-pill, #top-right .btn.live-btn { flex: none; }
+.load-pop { width: 350px; } .load-pop .lp-row span { white-space: nowrap; flex: none; }
