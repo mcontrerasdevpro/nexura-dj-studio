@@ -103,6 +103,8 @@ export class Deck extends Emitter {
     // f = muestra de audio del informe (para comparar decks en el mismo instante); lat = retardo del key lock
     if (m.t === 's') { this.st = { pos: m.pos / this.sr, sp: m.sp, at: performance.now(), f: m.f, lat: m.lat || 0 }; }
     else if (m.t === 'ended') { this.playing = false; this.emit('state'); }
+    // rc.10: tiempo de proceso del worklet (medidor de carga, live/load-core.js)
+    else if (m.t === 'load') this.app.loadMeter?.deckReport(this.idx, m.busy, m.audio);
   }
 
   // ---------------------------------------------------------------- posición

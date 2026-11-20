@@ -28,7 +28,7 @@ function notesText(rel, max = 3) {
 }
 
 function createUpdater({ autoUpdater, version = '', send = () => {}, log = () => {}, beforeInstall = async () => {}, enabled = true, setTimer = setTimeout, setRepeat = setInterval }) {
-  const st = { state: enabled ? 'idle' : 'disabled', version: '', percent: 0, notes: [], manual: false, auto: true, prerelease: false };
+  const st = { state: enabled ? 'idle' : 'disabled', version: '', percent: 0, notes: [], manual: false, auto: true, prerelease: false, live: false };
   let started = false, repeat = null;
   const emit = () => send({ state: st.state, version: st.version, percent: st.percent, notes: st.notes });
 
@@ -85,8 +85,13 @@ function createUpdater({ autoUpdater, version = '', send = () => {}, log = () =>
     } else if (chan && st.auto && st.state === 'idle') check(false);
   }
 
+  // rc.10: sesión en directo (la interfaz lo avisa con live:state). Mientras dura se sigue comprobando en silencio,
+  // pero no se descarga ni se instala nada (tampoco si lo pide la interfaz por error)
+  function setLive(on) { st.live = !!on; }
+
   async function download() {
     if (!enabled || st.state !== 'available') return false;
+    if (st.live) { log('INFO', 'Descarga aplazada: sesión en directo'); return false; }
     st.state = 'downloading'; st.percent = 0; emit();
     try { await autoUpdater.downloadUpdate(); return true; } catch (_) { return false; }
   }
@@ -94,13 +99,14 @@ function createUpdater({ autoUpdater, version = '', send = () => {}, log = () =>
   // Reiniciar e instalar (la interfaz ya ha comprobado que no hay ningún deck sonando)
   async function install() {
     if (!enabled || st.state !== 'downloaded') return false;
+    if (st.live) { log('INFO', 'Instalación aplazada: sesión en directo'); return false; }
     if (!st.backedUp) { try { await beforeInstall('actualizacion'); st.backedUp = true; } catch (_) { /* se instala igualmente */ } }
     // instalación silenciosa (sin el asistente ni el mensaje de bienvenida del instalador) y abrir la app
     setTimer(() => autoUpdater.quitAndInstall(true, true), 200);
     return true;
   }
 
-  return { check, configure, download, install, status: () => ({ ...st }), stop: () => repeat && clearInterval(repeat) };
+  return { check, configure, download, install, setLive, status: () => ({ ...st }), stop: () => repeat && clearInterval(repeat) };
 }
 
 module.exports = { createUpdater, notesText, isPrerelease, allowPrereleaseFor, EVERY };

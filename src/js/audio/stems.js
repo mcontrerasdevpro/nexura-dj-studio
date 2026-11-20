@@ -86,6 +86,8 @@ export class StemsManager extends Emitter {
   pumpSoon() { clearTimeout(this._pumpT); this._pumpT = setTimeout(() => this.pump(), 1500); }
   async pump() {
     if (!this.bgEnabled || this.busy || !this.bgQueue.length) return;
+    // rc.10: separar stems es lo más pesado de la app; en plena sesión en directo (o con el audio al límite) espera
+    if (this.app.live?.holdBackground()) { clearTimeout(this._pumpT); this._pumpT = setTimeout(() => this.pump(), 10000); return; }
     if (!this.info) await this.getInfo().catch(() => null);
     if (!this.info || !this.info.installed) return;
     const L = this.app.library;

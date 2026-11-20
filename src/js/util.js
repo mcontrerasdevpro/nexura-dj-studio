@@ -116,10 +116,15 @@ export function parseBpm(v) {
 }
 
 // action (opcional): { label, fn } → botón dentro del aviso (p. ej. «Deshacer»); se usa una sola vez
-export function toast(msg, type = 'info', ms = 3500, action = null) {
+// opts.kind (rc.10, modo sesión en directo): 'bg' = aviso de fondo (se aplaza al final de la sesión), 'critical' =
+// se muestra siempre; sin kind = respuesta a una acción del DJ (se muestra, en la versión discreta)
+let toastGate = null;
+export function setToastGate(fn) { toastGate = fn; }
+export function toast(msg, type = 'info', ms = 3500, action = null, opts = null) {
+  if (toastGate && !(opts && opts.force) && toastGate({ msg, type, ms, action, kind: opts && opts.kind }) === false) return;
   const host = document.getElementById('toasts');
   if (!host) return console.log(msg);
-  const t = el('div', { class: 'toast ' + type }, msg);
+  const t = el('div', { class: 'toast ' + type + (opts && opts.kind === 'critical' ? ' critical' : '') }, msg);
   const hide = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
   if (action) t.append(el('button', { class: 'toast-act', onclick: () => { hide(); action.fn(); } }, action.label));
   host.appendChild(t);

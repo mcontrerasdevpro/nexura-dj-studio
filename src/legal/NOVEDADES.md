@@ -1,5 +1,28 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.10 · noviembre de 2026
+
+### Modo «sesión en directo»: la app no te interrumpe mientras pinchas
+- En cuanto un deck suena al aire (o activas Automix, Autoplay o REC), se enciende **«● EN DIRECTO»** en la barra superior. Mientras dura, **no salen avisos de actualización, ni ventanas, ni análisis pesados** que no hayas pedido tú. Lo que no es urgente espera y te lo enseñamos al terminar (2 minutos sin nada al aire, o al apagar el botón).
+- Los avisos importantes se ven **siempre**, en pequeño y sin tapar CUE ni PLAY: salida de audio perdida, cortes de audio, disco lleno al grabar o carga sobre el deck que suena.
+- Puedes encenderlo o apagarlo a mano con el botón, y en **Ajustes → Reproducción → «Modo sesión en directo»** eliges **Automático** (de serie), **Siempre activado** o **Desactivado**.
+- Durante la sesión **la app no descarga ni instala actualizaciones** (solo mira si hay una nueva).
+- **Al cerrar la ventana con música sonando, te pregunta antes**: «Hay música sonando. ¿Cerrar Nexura DJ Studio?».
+
+### Si la app se cierra de golpe, recuperas la sesión
+- La app guarda cada 2 segundos qué tienes en cada deck: el tema, por dónde va, pitch, key lock, sync, loop y la mezcla (faders, crossfader, EQ y filtro).
+- Si se cierra de forma inesperada (o la ventana se cuelga y se recarga sola), al volver te pregunta **«La última sesión se cerró de forma inesperada. ¿Recuperarla?»**. Con **Recuperar**, los temas vuelven a sus decks, **en su sitio y en pausa**: nada empieza a sonar solo. Si algún tema ya no está, te lo dice y recupera el resto.
+
+### Latencia y medidor de carga
+- Nuevo ajuste **Ajustes → Audio → «Latencia»**: **Baja** (scratch y controladora), **Equilibrada** (de serie) y **Segura** (equipos lentos o portátiles). Ves la latencia real en milisegundos. Sin música, el cambio se aplica al momento (el audio se monta de nuevo en un segundo y los temas siguen donde estaban, en pausa); con música sonando **no se corta**: se aplica al pararla.
+- Nuevo medidor **«CPU %»** en la barra superior (verde, ámbar o rojo). Al pasar el ratón: carga del audio, cortes detectados, fluidez de la interfaz y latencia.
+- Si el equipo va justo (carga del audio por encima del 70 % o cortes), te avisa con **«Subir latencia a Segura»**, **pausa el análisis en segundo plano** y **aligera las ondas** hasta que pase el pico.
+- El informe de sugerencias incluye la latencia, la carga máxima y los cortes, para que podamos ayudarte mejor.
+
+### Tonalidad (Key) más precisa
+- Detector de tonalidad nuevo: corrige la **afinación** del tema (por ejemplo, temas a 432 Hz), ignora la percusión y el fondo, mira el tema entero por tramos y usa **perfiles aprendidos de música actual**. Con nuestra colección de prueba el acierto exacto sube de **~43 % a ~57 %**, y la mayoría de los fallos que quedan son tonalidades compatibles (quinta, relativa o paralela).
+- Las tonalidades analizadas con la versión anterior se recalculan solas al cargar el tema o con «Analizar». **Las que hayas puesto tú a mano no se tocan nunca.**
+
 ## 1.0.0-rc.9 · noviembre de 2026
 
 ### Directo seguro: no se corta el tema que suena

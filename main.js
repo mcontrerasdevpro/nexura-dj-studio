@@ -24,6 +24,7 @@ const cleanupScan = require('./main/cleanup-scan');
 const tagWriter = require('./main/tag-writer');
 const recycle = require('./main/recycle');
 const { createMb } = require('./main/musicbrainz');
+const { createLiveGuard, createCrashGuard } = require('./main/live-main');
 
 // Servicios de NexuraIA (src/config/servicios.json; vacío = desactivado):
 //   feedbackUrl → informes y sugerencias (POST JSON); statsUrl → contador anónimo de uso (POST JSON);
@@ -63,6 +64,10 @@ if (!app.requestSingleInstanceLock()) {
 
 let mainWindow = null;
 let serverPort = 0;
+// rc.10: ¿suena música? / ¿sesión en directo? (lo manda la interfaz: live:state) → confirmación al cerrar y actualizador
+const liveGuard = createLiveGuard({ dialog, log: (...a) => log(...a) });
+let appQuitting = false;
+app.on('before-quit', () => { appQuitting = true; });
 
 // ---------------------------------------------------------------------------
 // Rutas de datos
@@ -1399,6 +1404,14 @@ function registerIpc() {
   ipcMain.handle('stats:preview', (_e, info) => stats.buildPayload({ id: '00000000-0000-4000-8000-000000000000', version: app.getVersion(), lang: app.getLocale(), os: OS_LABEL, decks: (info || {}).decks, controller: (info || {}).controller }));
 
   // ---- Actualizaciones (main/updater.js)
+  // rc.10: estado de la sesión (suena música / sesión en directo) → confirmación al cerrar y actualizador en pausa
+  ipcMain.on('live:state', (e, s) => {
+    if (!mainWindow || mainWindow.isDestroyed() || e.sender !== mainWindow.webContents) return;
+    const prev = liveGuard.state();
+    liveGuard.setState(s);
+    if (updater && updater.setLive) updater.setLive(!!(s && s.live));
+    if (prev.live !== !!(s && s.live)) log('INFO', 'directo', `Sesión en directo ${s && s.live ? 'activa: actualizaciones en pausa' : 'terminada'}`);
+  });
   ipcMain.handle('update:configure', (_e, cfg) => { updater.configure(cfg || {}); return updater.status(); });
   ipcMain.handle('update:check', () => updater.check(true));
   ipcMain.handle('update:download', () => updater.download());
@@ -1484,13 +1497,31 @@ async function createWindow() {
   const win = mainWindow;
   // la ventana oculta de análisis no debe mantener la app abierta
   win.on('closed', () => { if (anaWin && !anaWin.isDestroyed()) anaWin.destroy(); });
+  // rc.10: con música sonando, se pregunta antes («Hay música sonando. ¿Cerrar Nexura DJ Studio?»)
+  let closeAsking = false;
   win.on('close', (e) => {
     if (closeFlushed) return;
     e.preventDefault();
-    flushRenderer().finally(() => { closeFlushed = true; if (!win.isDestroyed()) win.close(); });
+    if (closeAsking) return;
+    closeAsking = true;
+    const wc = win.webContents;
+    const alive = !wc.isDestroyed() && !wc.isCrashed();
+    (alive ? liveGuard.confirmClose(win) : Promise.resolve(true)).then((ok) => {
+      closeAsking = false;
+      if (!ok || win.isDestroyed()) return;
+      flushRenderer().finally(() => { closeFlushed = true; if (!win.isDestroyed()) win.close(); });
+    }, () => { closeAsking = false; });
   });
-  mainWindow.webContents.on('render-process-gone', (_e, d) => log('ERROR', 'main', `La interfaz se cerró inesperadamente (${d.reason}, código ${d.exitCode})`));
-  mainWindow.webContents.on('unresponsive', () => log('WARN', 'main', 'La interfaz no responde'));
+  // rc.10: si la interfaz se cae o se cuelga, se recarga (y ofrece recuperar la sesión: no hay marca de cierre limpio)
+  const crashGuard = createCrashGuard({
+    log,
+    reload: () => setTimeout(() => { if (!win.isDestroyed()) win.loadURL(`http://localhost:${serverPort}/index.html?tras=cierre`).catch(e => log('ERROR', 'main', 'No se pudo recargar la interfaz: ' + e.message)); }, 400),
+    crash: () => { try { if (!win.isDestroyed()) win.webContents.forcefullyCrashRenderer(); } catch (e) { log('ERROR', 'main', 'No se pudo cerrar la interfaz colgada: ' + e.message); } },
+    showError: () => dialog.showErrorBox(APP_NAME, 'La ventana de Nexura DJ Studio se ha cerrado varias veces seguidas. Cierra la app y vuelve a abrirla; al abrirla podrás recuperar la sesión.')
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, d) => crashGuard.gone(d, closeFlushed || appQuitting));
+  mainWindow.webContents.on('unresponsive', () => crashGuard.unresponsive());
+  mainWindow.webContents.on('responsive', () => crashGuard.responsive());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };

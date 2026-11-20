@@ -1,5 +1,5 @@
 ﻿NEXURA DJ STUDIO — POLÍTICA DE PRIVACIDAD
-Versión 1.2 · noviembre de 2026
+Versión 1.3 · noviembre de 2026
 
 Responsable: Miguel Contreras Gallardo (NexuraIA), NIF 26035618D, Calle Guanabacoa 2A, Bajo, 28907 Getafe (Madrid)
 Contacto para cualquier cuestión de privacidad: contacto@nexuraia.com
@@ -11,6 +11,7 @@ Todo se guarda en la carpeta de datos de la app (%APPDATA%\Nexura DJ Studio):
 - Biblioteca: rutas de tus archivos de música, etiquetas, análisis (BPM, tonalidad, forma de onda), hot cues, loops, beatgrid, crates, Prepare e historial de sesiones.
 - Ajustes de la app y de tus controladoras MIDI, incluidas la carpeta de grabación que elijas y, del panel «Archivos», la última carpeta abierta, tus carpetas favoritas y las que tienes desplegadas en el árbol (y, en «arranque.json», si la aceleración por GPU está desactivada).
 - Copias de seguridad automáticas de la biblioteca (carpeta «copias», las 14 últimas).
+- Instantánea de la sesión para recuperarla si la app se cierra de golpe («data\sesion.json»): el identificador interno de la pista cargada en cada deck (no su ruta ni su nombre), por dónde va, si suena o está en pausa, pitch, key lock, sync, loop, la posición de faders, crossfader, EQ y filtro, y la vista. Se actualiza cada 2 segundos mientras usas la app y no sale de tu ordenador.
 - Registro técnico de errores (carpeta «logs», 5 archivos de 1 MB como mucho).
 - Si conectas tu cuenta de Google o de Spotify: las claves de sesión, cifradas con el sistema de Windows.
 - Los stems que separes.

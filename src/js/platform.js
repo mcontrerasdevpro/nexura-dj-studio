@@ -113,6 +113,11 @@ export const platform = {
   },
   // El proceso principal pide guardar lo pendiente antes de cerrar la ventana o reiniciar (main.js)
   onFlush(fn) { if (N && N.onFlush) N.onFlush(fn); },
+  // Sesión en directo (rc.10): el proceso principal pregunta al cerrar con música sonando y no actualiza en directo.
+  // En el navegador (pruebas) queda en window.__nexuraLiveState
+  live: {
+    setState(s) { if (N && N.liveState) N.liveState(s); else window.__nexuraLiveState = { ...s }; }
+  },
   // Aceleración por GPU (Ajustes → Audio → Rendimiento): se aplica al reiniciar la app
   gpu: {
     available: !!(N && N.gpu),
@@ -131,6 +136,8 @@ export const platform = {
       } catch (e) { if (/No se encuentra/.test(e.message)) throw e; }
     }
     if (N) return N.readFile(p);
+    // pruebas en el navegador (tools/ui-check-directo.cjs): archivos simulados que siguen ahí tras recargar
+    if (window.__nexuraFileMock) { const b = await window.__nexuraFileMock(p); if (b) return b; }
     const f = webFiles.get(p);
     if (!f) throw new Error('El archivo ya no está disponible en esta sesión del navegador');
     return new Uint8Array(await f.arrayBuffer());

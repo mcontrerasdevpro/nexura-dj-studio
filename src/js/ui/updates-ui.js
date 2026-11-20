@@ -34,7 +34,10 @@ export class UpdatesUI {
     if (lib && typeof ResizeObserver === 'function') new ResizeObserver(() => this.fit()).observe(lib);
     addEventListener('resize', () => this.fit());
     app.on('settings', (k) => { if (k === 'autoUpdate' || k === 'prereleaseUpdates') this.configure(); });
+    // rc.10: durante la sesión en directo no se ve nada de esto (se sigue comprobando en silencio); al terminar, sí
+    app.on('live', (on) => { this.render(); if (!on && this.liveHeld) { this.liveHeld = false; this.app.feedback?.log('INFO', 'actualizaciones', 'Fin de la sesión: se muestra el aviso de actualización'); } });
   }
+  get live() { return !!this.app.live?.active; }
 
   get available() { return platform.updates.available && this.app.info?.updates !== false; }
 
@@ -85,7 +88,8 @@ export class UpdatesUI {
   render() {
     const s = this.state, v = s.version || '', cur = this.app.info?.version || '';
     const ind = this.ind, top = this.topBtn;
-    const show = ['available', 'downloading', 'downloaded'].includes(s.state);
+    const show = ['available', 'downloading', 'downloaded'].includes(s.state) && !this.live;
+    if (this.live && ['available', 'downloaded'].includes(s.state)) this.liveHeld = true;
     const kind = s.state === 'downloaded' && this.deferred ? 'deferred' : s.state;
     if (s.state === 'available' || s.state === 'downloaded') this.pulse(s.state + v);
     const pulsing = (kind === 'available' || kind === 'downloaded') && Date.now() < (this.pulseUntil || 0);
@@ -155,6 +159,7 @@ export class UpdatesUI {
   }
 
   async download() {
+    if (this.live) return false; // nunca durante la sesión (el proceso principal también lo impide)
     this.state = { ...this.state, state: 'downloading', percent: 0 };
     this.render();
     const ok = await platform.updates.download().catch(() => false);
@@ -164,7 +169,7 @@ export class UpdatesUI {
   // Nunca en mitad de una sesión: con algún deck sonando se instala al cerrar
   async install() {
     const a = this.app;
-    if (a.decks.some(d => d.playing) || a.autoplay?.enabled || a.automix?.enabled) {
+    if (this.live || a.decks.some(d => d.playing) || a.autoplay?.enabled || a.automix?.enabled) {
       toast('Hay música sonando: la actualización se instalará cuando cierres Nexura DJ Studio.', 'info', 7000);
       this.deferred = true; this.render();
       return false;

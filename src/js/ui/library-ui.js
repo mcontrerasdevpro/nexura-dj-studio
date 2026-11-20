@@ -7,7 +7,7 @@ import { cratePath, pathLabel, effectiveColor } from '../library/crate-tree.js';
 import { treeFiles } from '../library/folder-crates.js';
 import { COL_BY_KEY, DEFAULT_COLS, MENU_COLS, visibleColumns, columnTemplate, columnsFor } from '../library/columns.js';
 import { ENERGY_MODES } from '../ai/assistant.js';
-import { needsGrid } from '../analysis/analyzer.js';
+import { needsGrid, needsKey } from '../analysis/analyzer.js';
 
 // Columnas: catálogo en library/columns.js. Las que se ven dependen de las elegidas por el usuario
 // (clic derecho en la cabecera; settings.libCols o, por crate, settings.libColsByView) y de cuántas caben
@@ -213,7 +213,7 @@ export class LibraryUI {
       this.sideToggle,
       el('span', { class: 'view-head' }, this.viewIco, this.viewTitle), this.countEl, this.quick, this.aiMode, this.fieldsBtn, this.searchIn, this.lockBtn,
       btn('✨ Pedir set', { cls: 'small ai-btn', title: 'Describe un set con tus palabras y la IA lo crea con tu música', onClick: () => this.app.aiPromptDialog() }),
-      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined || needsGrid(t)))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten, también las que tienen el beatgrid de una versión anterior (respeta tus BPM corregidos)' }),
+      btn('Analizar', { cls: 'small', onClick: () => this.app.analyzeMany(this.rows.filter(t => t.source === 'local' && (!t.analyzed || t.sections === undefined || needsGrid(t) || needsKey(t)))), title: 'Analiza BPM, tonalidad, forma de onda, estructura y energía de las pistas visibles que lo necesiten, también las que tienen el beatgrid o la tonalidad de una versión anterior (respeta tus BPM y tonalidades corregidos)' }),
       this.cleanBtn, this.menuBtn);
     this.head = el('div', { class: 'lib-head', style: { gridTemplateColumns: GRID }, title: 'Clic: ordenar · clic derecho: elegir columnas' });
     this.head.addEventListener('contextmenu', (e) => { e.preventDefault(); this.columnsMenu(e); });
@@ -294,7 +294,7 @@ export class LibraryUI {
     if (!added.length) return added;
     this.app.toast(`${countLabel(added.length)} del panel Archivos ${added.length === 1 ? 'añadida' : 'añadidas'} a la biblioteca`, 'ok');
     const todo = added.filter(t => !t.analyzed);
-    if (todo.length && this.app.settings.autoAnalyze) this.app.analyzeMany(todo);
+    if (todo.length && this.app.settings.autoAnalyze) this.app.analyzeMany(todo, false, { auto: true });
     return added;
   }
   // Grupo del árbol: cabecera (título y como mucho un botón) y sus filas

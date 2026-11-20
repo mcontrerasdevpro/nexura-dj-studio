@@ -2,6 +2,7 @@
 // interfaz de 4 canales de la Denon MC4000 (master 1/2, auriculares 3/4) o a
 // dos dispositivos distintos, medidores y grabación.
 import { Emitter, clamp, dbToGain } from '../util.js';
+import { latencyHintFor } from '../live/load-core.js';
 
 // Lo que se espera a que el dispositivo master quede elegido antes de montar la salida con el actual (setOutputs)
 export const SINK_WAIT_MS = 1500;
@@ -150,8 +151,14 @@ export class AudioEngine extends Emitter {
     this.sideSinks = new Set(); // <audio> abiertos en dispositivos secundarios (auriculares, deck 2 de la mesa externa)
   }
 
+  // Latencia (rc.10, live/load-core.js → LATENCY): Baja = 'interactive' (lo mínimo del sistema), Equilibrada = 20 ms
+  // (por defecto), Segura = 45 ms. La frecuencia es la del dispositivo (sin sampleRate: así no hay remuestreo) y el
+  // bloque del worklet de los decks es el de Web Audio (128 muestras: no se puede cambiar en esta versión de
+  // Chromium). latencyHint no se puede cambiar con el AudioContext creado: para aplicar otra latencia hay que crear
+  // uno nuevo (app.setLatency vuelve a montar la interfaz y recupera la sesión, sin perder la posición).
   async init(opts = {}) {
-    const latencyHint = opts.latency === 'low' ? 0.005 : (opts.latency === 'safe' ? 'playback' : 'interactive');
+    const latencyHint = latencyHintFor(opts.latency);
+    this.latency = opts.latency || 'normal';
     this.ctx = new AudioContext({ latencyHint });
     const ctx = this.ctx;
     // ¿ha llegado a sonar? (antes del primer clic el navegador lo tiene parado: no es un fallo de la salida)

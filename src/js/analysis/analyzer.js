@@ -1,6 +1,7 @@
 // Cliente del worker de análisis + caché de formas de onda
 import { gridUpdate } from '../audio/grid.js';
 import { GRID_VERSION } from './analysis-core.js';
+import { KEY_VERSION } from './key-core.js';
 import { platform } from '../platform.js';
 import { keyToCamelot, keyLabel, KEY_NAMES, yieldToUI } from '../util.js';
 
@@ -83,10 +84,13 @@ export class Analyzer {
       // tempo variable detectado: beatgrid con marcas (BPM dominante para la biblioteca)
       if (r.grid && r.grid.length > 1) Object.assign(meta, gridUpdate(r.grid, duration), { bpmLocked: false });
     }
+    // Tonalidad: la del análisis sustituye la que trae la etiqueta del archivo (que solo se muestra mientras la pista
+    // no está analizada); nunca la fijada a mano ni la importada de la colección de otro programa (keyLocked)
     if (r.keyTonic != null && !track.keyLocked) {
       meta.keyTonic = r.keyTonic; meta.keyMinor = r.keyMinor;
       meta.key = keyLabel(r.keyTonic, r.keyMinor);
       meta.camelot = keyToCamelot(KEY_NAMES[r.keyTonic], r.keyMinor);
+      meta.keyV = r.keyV || KEY_VERSION;
     }
     return meta;
   }
@@ -104,6 +108,10 @@ export class Analyzer {
 // Pista local analizada con un beatgrid automático de una versión anterior (BPM redondeado, fase tarde o en el
 // contratiempo, marcas falsas): se vuelve a analizar. Nunca si el BPM o el grid los ha fijado el usuario.
 export const needsGrid = (t) => !!(t && t.source === 'local' && t.analyzed && !t.bpmLocked && (t.gridV || 1) < GRID_VERSION);
+// Igual con la tonalidad (rc.10, KEY_VERSION 2): analizada con el detector anterior y no fijada por el usuario
+// Solo los campos de la tonalidad de unos metadatos de análisis (si la tonalidad está fijada, no trae ninguno)
+export const keyFieldsOf = (m) => Object.fromEntries(['keyTonic', 'keyMinor', 'key', 'camelot', 'keyV'].filter(k => m && m[k] !== undefined).map(k => [k, m[k]]));
+export const needsKey = (t) => !!(t && t.source === 'local' && t.analyzed && !t.keyLocked && (t.keyV || 1) < KEY_VERSION);
 
 // BPM fijado por el usuario: el análisis lo respeta (solo calcula lo demás con esa rejilla)
 const lockOpts = (track, opts) => (track.bpmLocked && track.bpm ? { ...opts, lockedBpm: track.bpm, lockedFirstBeat: track.firstBeat || 0 } : opts);
