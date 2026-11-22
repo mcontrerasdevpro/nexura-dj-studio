@@ -69,12 +69,16 @@ function barFeatures(x, track, b0, nBars) {
   const F = [];
   for (let k = 0; k < nBars; k++) {
     const t0 = Grid.beatTime(track, b0 + 4 * k), t1 = Grid.beatTime(track, b0 + 4 * k + 4);
-    let kicks = 0;
-    for (let j = 0; j < 4; j++) { const o = onsetNear(env, Grid.beatTime(track, b0 + 4 * k + j), 0.04); if (o && o.s >= 0.35 * env.loud) kicks++; }
-    F.push({ k, t: t0, kick: kicks / 4, bass: db(rms(sub, t0, t1)), en: db(rms(x, t0, t1)) });
+    let kicks = 0, off = 0;
+    for (let j = 0; j < 4; j++) {
+      const tb = Grid.beatTime(track, b0 + 4 * k + j), bl = Grid.beatTime(track, b0 + 4 * k + j + 1) - tb;
+      const o = onsetNear(env, tb, 0.04); if (o && o.s >= 0.35 * env.loud) kicks++;
+      off += rms(sub, tb + 0.45 * bl, tb + 0.85 * bl) / 4; // la línea de bajo: graves ENTRE bombos (sin el golpe)
+    }
+    F.push({ k, t: t0, kick: kicks / 4, bass: db(rms(sub, t0, t1)), en: db(rms(x, t0, t1)), bassOff: db(off) });
   }
-  const bRef = pctl(F.map(f => f.bass), 0.9), eRef = pctl(F.map(f => f.en), 0.9);
-  for (const f of F) { f.bass -= bRef; f.en -= eRef; }
+  const bRef = pctl(F.map(f => f.bass), 0.9), eRef = pctl(F.map(f => f.en), 0.9), oRef = pctl(F.map(f => f.bassOff), 0.9);
+  for (const f of F) { f.bass -= bRef; f.en -= eRef; f.bassOff -= oRef; }
   return F;
 }
 
@@ -108,19 +112,46 @@ function reference(F) {
     const ref = mean(lastFull - 24, lastFull - 8, 'en');
     for (let k = Math.max(entry + 8, lastFull - 40); k < n - 8; k++) if (mean(k, n, 'en') < ref - 3 && F.slice(k).every(f => f.en < ref - 1)) { outro = k; break; }
   }
-  return { start: firstSound, entry, breaks, drops, outro };
+  // v4 (fran6): subidones = entradas a una parte llena (6+ compases) tras 4+ compases que no lo son
+  const rises = [];
+  for (let k = 1; k < n;) {
+    if (!full(k)) { k++; continue; }
+    let e = k; while (e < n && (full(e) || full(e + 1))) e++;
+    let p = k; while (p > 0 && !full(p - 1)) p--;
+    if (e - k >= 6 && k - p >= 4) rises.push(k);
+    k = Math.max(e, k + 1);
+  }
+  // entrada de la línea de bajo (graves entre bombos a ≤ 6 dB de lo normal, 3 de 4 compases) tras el bombo
+  let bassIn = -1;
+  const bassOn = (k) => k >= 0 && k < n && F[k].bassOff >= -6 && F[k].kick >= 0.5;
+  for (let k = Math.max(0, entry); entry >= 0 && k + 4 <= n; k++) if (bassOn(k) && [k, k + 1, k + 2, k + 3].filter(bassOn).length >= 3) { bassIn = k; break; }
+  return { start: firstSound, entry, breaks, drops, outro, rises, bassIn };
 }
 
+// Puntuación v4: 1 Beat = entrada del bombo (o el primer sonido si suena desde el principio) · 2 Subidón y
+// 3 Principal = alguna entrada a parte llena (subidón) de la referencia · 4 Salida = un subidón posterior o el outro.
+// Los cues de versiones anteriores se traducen (Inicio/Entrada → Beat, Drop → Principal, Outro → Salida; Break no
+// cuenta). Acierto: a ±1 compás. Falta: hay parte en la referencia y no hay cue.
+const V4 = { start: 'beat', entry: 'beat', drop: 'main', outro: 'exit', beat: 'beat', rise: 'rise', main: 'main', exit: 'exit' };
 function score(cues, ref, b0, track) {
   const barOf = (t) => (Grid.beatAt(track, t) - b0) / 4;
   const out = { ok: 0, bad: 0, miss: 0, detail: [] };
-  // con bombo desde el principio la Entrada es el Inicio: no se espera un cue aparte
-  const want = { start: ref.start >= 0 ? [ref.start] : [], entry: ref.entry > ref.start + 1 ? [ref.entry] : [], break: ref.breaks, drop: ref.drops, outro: ref.outro >= 0 ? [ref.outro] : [] };
+  const c4 = {};
+  for (const c of cues) { const k = V4[c.type]; if (k && !(k === 'beat' && c4.beat && c.type === 'start')) c4[k] = c; }
+  const rises = ref.rises.length ? ref.rises : ref.drops;
+  const mainBar = c4.main ? barOf(c4.main.t) : -1;
+  const want = {
+    // Beat: el bombo con el bajo (si el bajo entra ≤ 12 compases después del bombo) o el primer bombo
+    beat: [ref.bassIn >= 0 && ref.bassIn - Math.max(0, ref.entry) <= 12 ? ref.bassIn : (ref.entry > ref.start + 2 ? ref.entry : Math.max(0, ref.start))],
+    rise: [...rises, ...(ref.bassIn >= 0 ? [ref.bassIn] : [])],
+    main: rises,
+    exit: [...rises.filter(r => r > mainBar + 4), ...(ref.outro >= 0 ? [ref.outro] : [])]
+  };
   for (const type of Object.keys(want)) {
-    const c = cues.find(p => p.type === type);
-    if (!c) { if (want[type].length && type !== 'start') { out.miss++; out.detail.push(`${type}: falta (ref ${want[type].join('/')})`); } continue; }
-    const b = barOf(c.t), d = Math.min(...want[type].map(w => Math.abs(w - b)));
-    if (want[type].length && d <= 1.01) { out.ok++; out.detail.push(`${type} ✓ ${b.toFixed(1)}`); }
+    const c = c4[type];
+    if (!c) { if (want[type].length && (type === 'main' || type === 'beat')) { out.miss++; out.detail.push(`${type}: falta (ref ${want[type].join('/')})`); } continue; }
+    const b = barOf(c.t), d = want[type].length ? Math.min(...want[type].map(w => Math.abs(w - b))) : 99;
+    if (d <= 1.01) { out.ok++; out.detail.push(`${type} ✓ ${b.toFixed(1)}`); }
     else { out.bad++; out.detail.push(`${type} ✗ ${b.toFixed(1)} (ref ${want[type].join('/') || '—'})`); }
   }
   return out;
@@ -140,17 +171,18 @@ for (const p of TRACKS) {
   const wave = { data: r.wave, rate: r.waveRate };
   const opts = { energy: NEW.waveEnergy(wave), onset: NEW.waveOnset(wave), wave };
   const now = NEW.autoCuePoints(track, opts);
-  const before = OLD ? OLD.autoCuePoints(track, { energy: OLD.waveEnergy(wave), onset: OLD.waveOnset(wave) }) : [];
-  // compás 0 = el Inicio de los cues de ahora (mismo cálculo en las dos versiones)
-  const startT = (now.find(q => q.type === 'start') || before.find(q => q.type === 'start') || { t: track.firstBeat }).t;
-  const b0 = Math.round(Grid.beatAt(track, startT));
+  const before = OLD ? OLD.autoCuePoints(track, { energy: OLD.waveEnergy(wave), onset: OLD.waveOnset(wave), wave }) : [];
+  // compás 0 = el primer downbeat con música (el mismo cálculo que el Inicio de antes / el Beat de ahora)
+  const b0 = NEW.startBeat(track, opts.onset);
   const nBars = Math.floor((Grid.beatAt(track, duration) - b0) / 4);
   const F = barFeatures(x, track, b0, nBars);
   const ref = reference(F);
+  // nombre@compás (% de la duración)
+  const lbl = (q) => `${q.name}@${((Grid.beatAt(track, q.t) - b0) / 4).toFixed(0)} (${Math.round(100 * q.t / duration)} %)`;
   const sb = OLD ? score(before, ref, b0, track) : null, sn = score(now, ref, b0, track);
-  results.push({ title, bpm: r.bpm, ref, antes: sb, ahora: sn, cAntes: before.map(q => `${q.name}@${((Grid.beatAt(track, q.t) - b0) / 4).toFixed(0)}`), cAhora: now.map(q => `${q.name}@${((Grid.beatAt(track, q.t) - b0) / 4).toFixed(0)}`) });
+  results.push({ title, bpm: r.bpm, ref, antes: sb, ahora: sn, cAntes: before.map(lbl), cAhora: now.map(lbl), pct: now.map(q => Math.round(100 * q.t / duration)), cola: now.map(q => +(duration - q.t).toFixed(1)) });
   console.log(`\n${title} · ${r.bpm} BPM · ${nBars} compases`);
-  console.log(`  referencia: inicio ${ref.start} · entrada ${ref.entry} · breaks ${ref.breaks.join(',') || '—'} · drops ${ref.drops.join(',') || '—'} · outro ${ref.outro >= 0 ? ref.outro : '—'}`);
+  console.log(`  referencia: inicio ${ref.start} · entrada ${ref.entry} · breaks ${ref.breaks.join(',') || '—'} · drops ${ref.drops.join(',') || '—'} · subidones ${ref.rises.join(',') || '—'} · entra el bajo ${ref.bassIn} · outro ${ref.outro >= 0 ? ref.outro : '—'}`);
   if (sb) console.log(`  antes: ${results.at(-1).cAntes.join(' · ')}  → ${sb.ok} bien, ${sb.bad} mal, ${sb.miss} faltan · ${sb.detail.join(' | ')}`);
   console.log(`  ahora: ${results.at(-1).cAhora.join(' · ')}  → ${sn.ok} bien, ${sn.bad} mal, ${sn.miss} faltan · ${sn.detail.join(' | ')}`);
   const mark = (list, k) => list.filter(q => Math.round((Grid.beatAt(track, q.t) - b0) / 4) === k).map(q => q.name[0] + q.name[1]).join(',');

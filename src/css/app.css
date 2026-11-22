@@ -503,6 +503,9 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 .phase-meter.off { visibility: hidden; }
 .phase-meter .pm-c { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--line2); }
 .phase-meter .pm-dot { position: absolute; left: 50%; top: 1px; width: 8px; height: 4px; margin-left: -4px; border-radius: 2px; background: var(--err); }
+.phase-meter .pm-off { display: none; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--warn); opacity: .9; }
+.phase-meter.user-offset .pm-c { opacity: .45; }
+.btn.sync.on.offset { outline: 1px dashed var(--warn); outline-offset: -3px; }
 .phase-meter[data-state="ok"] .pm-dot { background: var(--ok); }
 .phase-meter[data-state="ok"] .pm-c { background: var(--ok); }
 .phase-meter[data-state="warn"] .pm-dot { background: var(--warn); }
@@ -814,6 +817,10 @@ body:not([data-wave-layout="deck"]) .deck-clock { width: auto; height: auto; fle
 .ctx-item:hover > .ctx { display: block; }
 .ctx-item.has-sub::after { content: "›"; margin-left: auto; color: var(--muted); }
 .ctx-item.danger { color: var(--err); }
+.ctx-item.disabled { color: var(--muted); cursor: default; }
+canvas.cue-hover { cursor: ew-resize; }
+canvas.cue-dragging { cursor: grabbing; }
+.ctx-item.disabled:hover { background: none; }
 .ctx-key { margin-left: auto; padding-left: 24px; color: var(--muted); font-size: .9em; }
 .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
 /* Panel del Autoplay */

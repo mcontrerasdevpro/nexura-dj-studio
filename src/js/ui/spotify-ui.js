@@ -307,7 +307,7 @@ export class SpotifyImportUI {
     if (prepare) L.addToPrepare(ids);
     const missing = this.items.filter(it => !it.local && !it.yt).length;
     this.app.closeModal();
-    this.app.showInSetOrder();
+    this.app.showInSetOrder(crate ? 'crate:' + crate.id : 'prepare');
     this.app.libraryUI.setView(crate ? 'crate:' + crate.id : 'prepare');
     toast(`${ids.length} pistas ${crate ? `en la crate «${crate.name}»` : 'añadidas a Prepare'}${prepare && crate ? ' y en Prepare' : ''}${missing ? ` · ${missing} sin encontrar (🛒 para comprarlas)` : ''}`, missing ? 'warn' : 'ok', 6000);
     return { crate, ids };

@@ -1440,7 +1440,7 @@ class App extends Emitter {
       this.decks.forEach(d => { if (d.track === t) d.emit('cues'); });
     }
     status.textContent = '';
-    toast(total ? `IA: ${total} cues automáticos (Inicio, Entrada, Drop, Break y Outro; tus cues no se tocan)` : 'IA: no se detectaron partes claras o no había pads libres', total ? 'ok' : 'info');
+    toast(total ? `IA: ${total} cues automáticos (1 Beat, 2 Subidón, 3 Principal y 4 Salida; tus cues no se tocan)` : 'IA: no se detectaron partes claras o no había pads libres', total ? 'ok' : 'info');
   }
   async aiBuildSet(start) {
     if (!start) return;
@@ -1459,15 +1459,18 @@ class App extends Emitter {
     const crate = this.library.createCrate(`Set IA · ${start.title}`.slice(0, 60));
     if (!crate) return;
     this.library.addToCrate(crate.id, set.map(t => t.id));
-    this.showInSetOrder();
+    this.showInSetOrder('crate:' + crate.id);
     this.libraryUI.setView('crate:' + crate.id);
     toast(`Set creado: ${set.length} pistas en la crate «${crate.name}»`, 'ok');
   }
 
   // Los sets de la IA tienen orden: quitar el orden por columna para verlos tal cual
-  showInSetOrder() {
-    this.libraryUI.sort = { field: null, dir: 1 };
-    this.setSetting('libSort', this.libraryUI.sort);
+  // (fran6: el orden es de cada fuente; `view` = la vista que se va a abrir)
+  showInSetOrder(view) {
+    const all = { ...(this.settings.libSortBy || {}) };
+    all[view] = { field: null, dir: 1 };
+    this.libraryUI.viewState.delete(view);
+    this.setSetting('libSortBy', all);
   }
 
   // Pedir un set por texto (Ollama local o intérprete de reglas)
@@ -1502,7 +1505,7 @@ class App extends Emitter {
     if (!crate) { if (toPrepare.checked) { this.library.addToPrepare(plan.set.map(t => t.id)); this.libraryUI.setView('prepare'); toast(`Set de ${plan.set.length} pistas enviado a Prepare (la biblioteca está protegida: no se crea la crate)`, 'ok', 6000); } return; }
     this.library.addToCrate(crate.id, plan.set.map(t => t.id));
     if (toPrepare.checked) this.library.addToPrepare(plan.set.map(t => t.id));
-    this.showInSetOrder();
+    this.showInSetOrder('crate:' + crate.id);
     this.libraryUI.setView('crate:' + crate.id);
     const mins = Math.round(plan.set.reduce((s, t) => s + (t.duration || 300) * 0.7, 0) / 60);
     const f = [req.minBpm != null ? `${req.minBpm}-${req.maxBpm} BPM` : '', req.genres?.length ? req.genres.join(', ') : '', { up: 'subiendo', wave: 'en ola', keep: 'estable', down: 'bajando' }[plan.curve]].filter(Boolean).join(' · ');
@@ -1627,11 +1630,11 @@ class App extends Emitter {
   contextMenu(e, items) {
     this.closeMenus();
     const build = (list) => el('div', { class: 'ctx' }, ...list.map(it => {
-      const row = el('div', { class: 'ctx-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : '') },
+      const row = el('div', { class: 'ctx-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : '') + (it.disabled ? ' disabled' : '') },
         it.color ? el('span', { class: 'swatch', style: { background: it.color } }) : null, it.label || '',
         it.key ? el('span', { class: 'ctx-key' }, it.key) : null);
       if (it.sub) row.appendChild(build(it.sub));
-      else row.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); this.closeMenus(); it.fn && it.fn(); });
+      else if (!it.disabled) row.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); this.closeMenus(); it.fn && it.fn(); });
       row.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       return row;
     }));
@@ -1701,9 +1704,14 @@ class App extends Emitter {
         return;
       }
       // Ctrl+Z = deshacer lo último que se ha quitado con Supr / Ctrl+Supr
+      // (fran6) …o el último cambio de un cue (mover, renombrar, color, borrar), si es más reciente
       if (hard && e.code === 'KeyZ' && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        if (!e.repeat) this.libraryUI.undoLast();
+        if (!e.repeat) {
+          const lu = (this.libraryUI.undoStack || []).filter(u => !u.done && Date.now() - u.at < 120000).pop();
+          const cd = this.decks.reduce((b, d) => (d.lastCueUndoAt && d.lastCueUndoAt() > (b ? b.lastCueUndoAt() : 0) ? d : b), null);
+          if (cd && (!lu || cd.lastCueUndoAt() > lu.at)) cd.undoCue(); else this.libraryUI.undoLast();
+        }
         return;
       }
       // Ctrl+→ = Autoplay: siguiente pista

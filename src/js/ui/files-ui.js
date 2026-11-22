@@ -201,9 +201,11 @@ export class FilesBrowser {
     const req = ++this.req;
     this.metaRun++;
     const rec = this.recursive;
+    if (this.active) this.ui.saveViewState(); // fran6: la carpeta que se deja recuerda su sitio
     this.dir = { path, name: baseName(path), files: [], error: '', scanning: true, folders: 0, capped: false, deep: false, rec };
     this.relOf.clear();
-    if (!this.active) this.ui.setView('files'); else this.ui.relayout();
+    if (!this.active) this.ui.setView('files');
+    else { this.ui.restoreViewState(); this.ui.scroller.scrollTop = 0; this.ui._noAnchor = true; this.ui.relayout(); this.ui._noAnchor = false; }
     this.markSide();
     this.renderBar();
     this.ui.refresh(true);

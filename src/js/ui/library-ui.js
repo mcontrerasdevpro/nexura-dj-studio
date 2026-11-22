@@ -86,6 +86,11 @@ export class LibraryUI {
     this.viewId = app.settings.libView || 'all';
     this.search = '';
     this.sort = app.settings.libSort || { field: null, dir: 1 };
+    // fran6: cada fuente (carpeta, crate, smart crate, Todas, historial, Prepare…) recuerda su sitio al volver:
+    // scroll (primera fila visible), orden y selección. En memoria durante la sesión; el orden también se guarda
+    // en ajustes (libSortBy). `_restore`: sitio pendiente de aplicar cuando ya están las filas (lista virtual).
+    this.viewState = new Map();
+    this._restore = null;
     this.rows = [];
     this.sel = new Set();
     this.cursor = -1;
@@ -101,6 +106,7 @@ export class LibraryUI {
     // panel «Archivos» (solo escritorio): si se cerró la app en esa vista y ahora no está disponible, a «Todas»
     this.files = new FilesBrowser(this);
     if (this.viewId === 'files' && !this.files.available) this.viewId = 'all';
+    { const s = (app.settings.libSortBy || {})[this.viewId]; if (s && this.viewId !== 'files') this.sort = { ...s }; }
     this.build();
     this.lib.on('change', debounce(() => { this.renderSide(); this.refresh(); }, 60));
     this.lib.on('track', debounce(() => this.refresh(false), 120));
@@ -222,6 +228,8 @@ export class LibraryUI {
     this.rowsEl = el('div', { class: 'lib-rows' });
     this.scroller.append(this.spacer, this.rowsEl);
     this.scroller.addEventListener('scroll', () => this.renderRows());
+    // si el DJ mueve la lista mientras aún se restaura su sitio (filas que siguen llegando), manda él
+    for (const ev of ['wheel', 'pointerdown', 'keydown']) this.scroller.addEventListener(ev, () => { this._restore = null; }, { passive: true });
     this.scroller.addEventListener('focus', () => { this.focus = 'table'; this.root.classList.remove('side-focus'); });
     this.empty = el('div', { class: 'lib-empty' });
     this.explorePanel = el('div', { class: 'lib-explore', hidden: true, role: 'group', 'aria-label': 'Explorar por género, BPM y artista' });
@@ -624,15 +632,76 @@ export class LibraryUI {
     if (at) this.setSideCur(at);
   }
 
+  // ------------------------------------------------------------ sitio de cada fuente (fran6)
+  // Clave de la fuente: la vista y, en el panel Archivos, la carpeta abierta
+  sourceKey(viewId = this.viewId) {
+    if (viewId === 'files') return 'files:' + (this.files.dir ? this.files.dir.path + (this.files.dir.rec ? '|r' : '') : '');
+    return viewId;
+  }
+  // Guarda el sitio de la fuente actual (antes de cambiar a otra)
+  saveViewState() {
+    const key = this.sourceKey(), RH = this.rowH || 28;
+    const top = this.scroller ? this.scroller.scrollTop : 0;
+    // si todavía se estaba restaurando (filas por llegar), se conserva el sitio pedido, no el provisional
+    const pend = this._restore && this._restore.key === key ? this._restore : null;
+    const row = pend ? pend.row : top / RH;
+    const first = pend ? pend.firstId : (this.rows[Math.floor(row)] || {}).id || null;
+    const cur = this.cursor >= 0 && this.rows[this.cursor] ? this.rows[this.cursor].id : (pend ? pend.cursorId : null);
+    this.viewState.set(key, { sort: { ...this.sort }, row, firstId: first, frac: row - Math.floor(row), sel: [...this.sel], cursorId: cur });
+  }
+  // Recupera el sitio de la fuente actual (orden ya; scroll y fila cuando estén las filas)
+  restoreViewState() {
+    const key = this.sourceKey(), st = this.viewState.get(key);
+    const saved = (this.app.settings.libSortBy || {})[key];
+    this.sort = st ? { ...st.sort } : saved ? { ...saved } : (this.app.settings.libSort || { field: null, dir: 1 });
+    this.sel = new Set(st ? st.sel : []);
+    this.cursor = -1;
+    this._restore = st && (st.row > 0 || st.cursorId) ? { key, row: st.row, firstId: st.firstId, frac: st.frac || 0, cursorId: st.cursorId, until: performance.now() + 20000 } : null;
+    this._restoreCursor = st ? st.cursorId : null;
+  }
+  // Guarda el orden de esta fuente en ajustes (sin rutas en informes: solo en los ajustes locales)
+  saveSortFor() {
+    const key = this.sourceKey(), all = { ...(this.app.settings.libSortBy || {}) };
+    delete all[key]; all[key] = { ...this.sort };
+    const keys = Object.keys(all); for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete all[k];
+    this.app.setSetting('libSortBy', all);
+  }
+  // Tras recalcular las filas: aplica el sitio pendiente (cuando ya hay filas suficientes) o, si la lista se ha
+  // recargado en segundo plano (filas que llegan o cambian de sitio), mantiene la misma fila arriba
+  applyScrollAfterRefresh(anchor) {
+    const RH = this.rowH || 28, s = this.scroller; if (!s) return;
+    const r = this._restore;
+    if (r && r.key === this.sourceKey()) {
+      if (performance.now() > r.until) { this._restore = null; return; }
+      let row = r.row;
+      if (r.firstId) { const i = this.rows.findIndex(t => t.id === r.firstId); if (i >= 0) row = i + r.frac; else row = -1; }
+      const max = this.rows.length * RH - (s.clientHeight || 0);
+      if (row >= 0 && (row * RH <= max + 1 || !this.loadingMore())) {
+        s.scrollTop = Math.max(0, Math.round(row * RH));
+        if (!this.loadingMore()) this._restore = null;
+        else r.row = row; // sigue vigilando por si llegan filas encima
+      }
+      return;
+    }
+    if (r) this._restore = null;
+    if (anchor && anchor.id) {
+      const i = this.rows.findIndex(t => t.id === anchor.id);
+      if (i >= 0 && i !== anchor.i) s.scrollTop = Math.max(0, Math.round((i + anchor.frac) * RH));
+    }
+  }
+  // ¿la fuente sigue cargando filas? (panel Archivos recorriendo subcarpetas)
+  loadingMore() { return this.viewId === 'files' && !!(this.files.dir && this.files.dir.scanning); }
+
   setView(id) {
     if (id === 'files' && !this.files.available) { this.app.toast('El panel Archivos solo está disponible en la app de escritorio', 'warn'); return; }
     const wasFiles = this.viewId === 'files';
+    this.saveViewState();
     this.viewId = id;
     if (id === 'files') this.files.show(); else if (wasFiles) this.files.hide();
     this.sideCur = id;
     this.railSel = null;
     this.app.setSetting('libView', id);
-    this.sel.clear(); this.cursor = -1;
+    this.restoreViewState();
     for (const it of this.tree.querySelectorAll('.side-item')) {
       const on = it.dataset.view === id;
       it.classList.toggle('on', on);
@@ -643,8 +712,9 @@ export class LibraryUI {
     this.updateRailSel();
     this.revealActive();
     // con columnas por crate, cada vista tiene las suyas; el panel Archivos añade «Carpeta»
+    this.scroller.scrollTop = 0; this._noAnchor = true; // fuente nueva: arriba, salvo que tenga su sitio guardado
     if (this.app.settings.libColsSame === false || wasFiles !== (id === 'files')) this.relayout(); else this.refresh();
-    this.scroller.scrollTop = 0;
+    this._noAnchor = false;
   }
 
   viewName() {
@@ -675,7 +745,14 @@ export class LibraryUI {
 
   // ------------------------------------------------------------ tabla
   refresh(resetScroll = false) {
-    const keepId = this.cursor >= 0 && this.rows[this.cursor] ? this.rows[this.cursor].id : null;
+    let keepId = this.cursor >= 0 && this.rows[this.cursor] ? this.rows[this.cursor].id : null;
+    if (!keepId && this._restoreCursor) keepId = this._restoreCursor;
+    // fila de arriba antes de recalcular (para no saltar si la lista cambia en segundo plano)
+    let anchor = null;
+    if (!resetScroll && !this._noAnchor && this.scroller && this.scroller.scrollTop > 0 && this.rows.length) {
+      const f = this.scroller.scrollTop / (this.rowH || 28), i = Math.floor(f);
+      if (this.rows[i]) anchor = { id: this.rows[i].id, i, frac: f - i };
+    }
     const isAi = this.viewId === 'ai:next';
     this.root.classList.toggle('ai-view', isAi);
     this.root.classList.toggle('all-view', this.viewId === 'all');
@@ -689,7 +766,10 @@ export class LibraryUI {
     else this.rows = this.lib.query(this.viewId, this.search, this.viewId.startsWith('history:') && !this.sort.field ? null : this.sort, fields);
     if (this.explore.on) this.rows = this.applyExplore(this.rows);
     this.refreshQuick();
-    if (keepId) this.cursor = this.rows.findIndex(r => r.id === keepId);
+    if (keepId) {
+      this.cursor = this.rows.findIndex(r => r.id === keepId);
+      if (this.cursor >= 0 && keepId === this._restoreCursor) { this._restoreCursor = null; this.anchor = this.cursor; }
+    }
     // tras quitar pistas con Supr queda seleccionada la que ocupa ahora su lugar
     if (this.pendingSel != null) {
       const i = Math.min(this.pendingSel, this.rows.length - 1);
@@ -728,7 +808,8 @@ export class LibraryUI {
       } else if (this.viewId.startsWith('yt') && !this.search) this.empty.append(el('div', {}, el('h3', {}, 'Sin vídeos de YouTube'), el('p', {}, 'En la barra lateral, pulsa «+ Importar» en LISTAS ONLINE → «Lista de YouTube…» y pega la URL de una lista de reproducción.')));
       else this.empty.append(el('p', {}, 'No hay resultados.'));
     }
-    if (resetScroll) this.scroller.scrollTop = 0;
+    if (resetScroll && !(this._restore && this._restore.key === this.sourceKey())) this.scroller.scrollTop = 0;
+    this.applyScrollAfterRefresh(resetScroll ? null : anchor);
     this.renderRows();
   }
 
@@ -901,8 +982,9 @@ export class LibraryUI {
         if (e.target.classList.contains('col-rs')) return;
         // ▲ → ▼ → sin orden (orden propio de la crate o del set)
         this.sort = this.sort.field !== c.key ? { field: c.key, dir: 1 } : this.sort.dir > 0 ? { field: c.key, dir: -1 } : { field: null, dir: 1 };
-        this.app.setSetting('libSort', this.sort);
-        this.refresh();
+        // fran6: cada fuente recuerda su orden (libSort queda como orden por defecto de las fuentes sin orden propio)
+        this.saveSortFor();
+        this._noAnchor = true; this.refresh(); this._noAnchor = false;
       });
       this.head.appendChild(h);
     }
