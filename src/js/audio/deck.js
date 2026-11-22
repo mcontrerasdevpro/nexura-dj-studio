@@ -53,6 +53,7 @@ export class Deck extends Emitter {
     this.vinyl = true;
     this.sync = false;
     this.syncCorr = 0;       // corrección de fase del sync (fracción de tempo, ±2 %)
+    this.phaseOffset = 0;    // desfase elegido por el DJ respecto al maestro (beats de esta pista; > 0: va por detrás)
     this.syncMult = 1;       // beats de este deck por beat del maestro (×2 / ½ con BPM muy distintos)
     this.lastNudgeAt = 0;
     this.cuePoint = 0;
@@ -210,6 +211,7 @@ export class Deck extends Emitter {
       this.app.emit('mixerSync');
     }
     this.syncCorr = 0;
+    this.phaseOffset = 0; this._touchedPhase = false; // tema nuevo: sin desfase del DJ
     if (this.sync && this.isYT) { this.sync = false; this.app.toast(YT_SYNC_MSG, 'warn', 6000); }
     if (!this.followsMaster()) this.setTempo(1 + this.pitch * this.range);
     else this.syncNow(true);
@@ -467,11 +469,21 @@ export class Deck extends Emitter {
     if (on && this.isYT) { this.sync = false; this.app.toast(YT_SYNC_MSG, 'warn', 6000); this.emit('state'); return; }
     this.sync = !!on;
     this.syncCorr = 0; this.sendRate();
+    this.phaseOffset = 0; this._touchedPhase = false; // pulsar SYNC (re-sync) borra el desfase del DJ
     if (this.sync) { this.app.syncMgr?.ensure(this); this.syncNow(true); }
     else { this.pitch = clamp((this.tempo - 1) / this.range, -1, 1); }
     this.emit('state'); this.emit('tempo');
   }
   toggleSync() { this.setSync(!this.sync); }
+  // «Realinear fase» (Mayús+SYNC, acción MIDI): borra el desfase del DJ y vuelve a cuadrar con el maestro sin
+  // quitar el SYNC. Sin SYNC, lo activa.
+  realignPhase() {
+    if (!this.sync) { this.setSync(true); return; }
+    this.phaseOffset = 0; this._touchedPhase = false;
+    this.syncNow(true);
+    this.emit('state');
+  }
+  get hasPhaseOffset() { return this.sync && Math.abs(this.phaseOffset || 0) > 0.004; }
   // Iguala el tempo con el del maestro (con ×½ / ×2 si el BPM es muy distinto) y, con `phase`, alinea la fase
   syncNow(phase = false) {
     const m = this.syncMaster;
@@ -490,18 +502,23 @@ export class Deck extends Emitter {
     return st.pos + st.sp * (df - (st.lat || 0)) / sr;
   }
   // Error de fase respecto al maestro en segundos de esta pista (> 0: este deck va por detrás), comparando
-  // los dos decks en el mismo instante de audio
-  phaseError(m = this.syncMaster, k = this.syncMult || 1) {
-    if (!m || !this.bpm || !m.bpm) return 0;
+  // los dos decks en el mismo instante de audio. Descuenta el desfase elegido por el DJ (`phaseOffset`) salvo
+  // con `raw` (fase real, para el medidor y para guardar un desfase nuevo).
+  phaseBeats(m = this.syncMaster, k = this.syncMult || 1) {
     const F = this.st.f != null && m.st.f != null ? Math.max(this.st.f, m.st.f) : null;
     const me = this.audibleAt(F), mt = m.audibleAt(F);
-    const d = wrapHalf(frac(m.beatAt(mt) * k) - frac(this.beatAt(me)));
-    return d * 60 / (this.hasGridMarkers ? Grid.bpmAt(this.track, me) : this.track.bpm);
+    return { d: wrapHalf(frac(m.beatAt(mt) * k) - frac(this.beatAt(me))), me };
   }
-  // Posición a la que saltar (cerca de t) para quedar en fase con el maestro
+  phaseError(m = this.syncMaster, k = this.syncMult || 1, raw = false) {
+    if (!m || !this.bpm || !m.bpm) return 0;
+    const { d, me } = this.phaseBeats(m, k);
+    const e = raw || !this.sync ? d : wrapHalf(d - (this.phaseOffset || 0));
+    return e * 60 / (this.hasGridMarkers ? Grid.bpmAt(this.track, me) : this.track.bpm);
+  }
+  // Posición a la que saltar (cerca de t) para quedar en fase con el maestro (más el desfase del DJ)
   phaseTarget(t, m = this.syncMaster) {
     const F = this.st.f != null && m.st.f != null ? Math.max(this.st.f, m.st.f) : null;
-    const want = frac(m.beatAt(m.audibleAt(F)) * (this.syncMult || 1));
+    const want = frac(m.beatAt(m.audibleAt(F)) * (this.syncMult || 1) - (this.phaseOffset || 0));
     const lag = (this.st.lat || 0) * Math.abs(this.st.sp || this.tempo) / this.engine.ctx.sampleRate;
     const b = this.beatAt(t - lag);
     return this.beatTime(Math.round(b - want) + want) + lag;
@@ -518,15 +535,28 @@ export class Deck extends Emitter {
   }
   // Corrección continua (cada SYNC_TICK_MS): tempo del maestro y fase con un ajuste fino de velocidad
   // (como mucho ±2 %, se nota menos que un salto); si el desfase pasa de 35 ms (salto, nudge…), realinea
-  // con un salto con fundido. Mientras se toca el plato, el pitch bend o el nudge, no corrige.
+  // con un salto con fundido. Mientras se toca el plato, el pitch bend o el nudge (de este deck o del maestro),
+  // no corrige; al soltar, la fase que ha dejado el DJ se guarda como su desfase (`phaseOffset`) y el sync la
+  // mantiene (no la deshace). Se borra al pulsar SYNC, al cargar otro tema o con «Realinear fase».
+  isTouchingPhase(now = performance.now()) { return !!(this.scratching || this.bend !== 0 || now - (this.lastNudgeAt || 0) < 400); }
   syncTick() {
     const m = this.sync && !this.isYT ? this.syncMaster : null;
     if (!m) { if (this.syncCorr) { this.syncCorr = 0; this.sendRate(); } return; }
     this.syncNow(false); // sigue los cambios de tempo del maestro (y los tramos de un grid variable)
     const now = performance.now();
-    const touching = this.scratching || this.bend !== 0 || now - this.lastNudgeAt < 400;
+    const touching = this.isTouchingPhase(now) || (m.isTouchingPhase ? m.isTouchingPhase(now) : false);
+    if (touching) this._touchedPhase = true;
     if (!this.playing || !m.playing || touching || this.st.f == null || m.st.f == null) {
       if (this.syncCorr) { this.syncCorr = 0; this.sendRate(); }
+      return;
+    }
+    if (this._touchedPhase) {
+      // el DJ ha cuadrado a oído: esa fase manda desde ahora
+      this._touchedPhase = false;
+      this.phaseOffset = this.phaseBeats(m).d;
+      if (Math.abs(this.phaseOffset) < 0.002) this.phaseOffset = 0;
+      this.syncCorr = 0; this.sendRate();
+      this.emit('state');
       return;
     }
     const e = this.phaseError(m);
@@ -544,8 +574,9 @@ export class Deck extends Emitter {
     if (!ref || !ref.playing) return null;
     let k = this.syncMult || 1;
     if (!this.sync) { const r = ref.currentBpm / (this.currentBpm || 1); k = r > 1.4 ? 0.5 : r < 0.7 ? 2 : 1; }
-    const e = this.phaseError(ref, k);
-    return { ms: e / (this.tempo || 1) * 1000, beat: e / (60 / this.bpm), master: ref };
+    const e = this.phaseError(ref, k, true); // fase real (con el desfase del DJ incluido)
+    const off = this.sync ? (this.phaseOffset || 0) : 0;
+    return { ms: e / (this.tempo || 1) * 1000, beat: e / (60 / this.bpm), master: ref, offsetBeat: off, offsetMs: off * 60 / this.bpm / (this.tempo || 1) * 1000 };
   }
 
   // ---------------------------------------------------------------- keylock / tonalidad
@@ -581,6 +612,7 @@ export class Deck extends Emitter {
     if (!this.track || this.isYT) return;
     if (!this.vinyl) return;
     this.scratching = !!on;
+    this.lastNudgeAt = performance.now(); // al soltar el plato, la fase se asienta antes de guardarse
     if (on) { if (this.slip && this.playing) this.slipBegin(); this.send({ t: 'scratch', v: true }); }
     else { this.send({ t: 'scratch', v: false }); if (this.slip) this.slipEnd(); }
     this.emit('state');
@@ -660,9 +692,75 @@ export class Deck extends Emitter {
     this.app.toast(`Loop guardado → Cue Loop ${i + 1}`);
   }
   hotcueRelease(n) { if (this.held.delete('hc' + n)) this.slipEnd(); }
-  deleteCue(n) { if (this.track && this.track.cues[n]) { this.track.cues[n] = null; this.saveCues(); } }
-  setCueColor(n, color) { if (this.track && this.track.cues[n]) { this.track.cues[n].color = color; this.saveCues(); } }
-  setCueName(n, name) { if (this.track && this.track.cues[n]) { this.track.cues[n].name = name; this.saveCues(); } }
+  deleteCue(n) { if (this.track && this.track.cues[n]) { this.pushCueUndo('Borrar cue'); this.track.cues[n] = null; this.saveCues(); } }
+  // Renombrar o cambiar el color de un cue automático lo convierte en manual (ya no se recalcula)
+  setCueColor(n, color) { const c = this.track && this.track.cues[n]; if (c) { this.pushCueUndo('Color del cue'); c.color = color; this.makeManual(c); this.saveCues(); } }
+  setCueName(n, name) { const c = this.track && this.track.cues[n]; if (c) { this.pushCueUndo('Renombrar cue'); c.name = name; this.makeManual(c); this.saveCues(); } }
+
+  // ---------------------------------------------------------------- editar cues (fran6)
+  // Un cue automático que el DJ toca pasa a manual: conserva nombre y color y el análisis ya no lo recalcula
+  makeManual(c) { if (c && c.auto) { delete c.auto; delete c.autoV; c.edited = true; } return c; }
+  // Deshacer: copia de los cues antes de cada cambio (por pista, los 20 últimos)
+  pushCueUndo(label) {
+    if (!this.track) return;
+    const u = { at: Date.now(), id: this.track.id, label, cues: JSON.parse(JSON.stringify(this.track.cues)) };
+    this.cueUndo = [...(this.cueUndo || []).filter(x => x.id === this.track.id), u].slice(-20);
+  }
+  lastCueUndoAt() { const s = this.cueUndo || [], u = s[s.length - 1]; return u && this.track && u.id === this.track.id ? u.at : 0; }
+  undoCue() {
+    const s = this.cueUndo || [], u = s[s.length - 1];
+    if (!u || !this.track || u.id !== this.track.id) return false;
+    s.pop();
+    this.track.cues = u.cues;
+    this.saveCues();
+    this.app.toast?.(`Deshecho: ${u.label.toLowerCase()}`);
+    return true;
+  }
+  // Mueve el cue n a t. Con Q se pega al beat o al ataque (como al ponerlo); con free (Mayús), justo ahí.
+  // Un Cue Loop se mueve entero (mismo largo). undo=false: durante un arrastre (el deshacer se guarda al empezar)
+  moveCue(n, t, { free = false, undo = true, snap = true, save = true } = {}) {
+    const c = this.track && this.track.cues[n];
+    if (!c || !Number.isFinite(t)) return false;
+    let nt = snap ? this.cueTime(clamp(t, 0, Math.max(0, this.duration - 0.01)), free) : t;
+    nt = clamp(nt, 0, Math.max(0, (this.duration || nt + 1) - 0.01));
+    if (Math.abs(nt - c.t) < 1e-4) return false;
+    if (undo) this.pushCueUndo('Mover cue');
+    if (c.le > c.t) c.le = nt + (c.le - c.t);
+    c.t = Math.round(nt * 1e4) / 1e4;
+    this.makeManual(c);
+    if (save) this.saveCues(); else this.emit('cues'); // arrastrando: se guarda al soltar
+    return true;
+  }
+  // Arrastre del marcador de un cue en la onda: el deshacer se guarda al empezar y el cue al soltar
+  cueDragStart(n) {
+    const c = this.track && this.track.cues[n];
+    if (!c) return false;
+    this.pushCueUndo('Mover cue');
+    this._cueDrag = { n, t0: c.t, moved: false };
+    return true;
+  }
+  cueDragTo(t, free = false) {
+    const g = this._cueDrag; if (!g) return;
+    if (this.moveCue(g.n, t, { free, undo: false, save: false })) g.moved = true;
+  }
+  cueDragEnd() {
+    const g = this._cueDrag; this._cueDrag = null;
+    if (!g) return;
+    if (g.moved) this.saveCues();
+    else if (this.cueUndo && this.cueUndo.length) this.cueUndo.pop(); // no se ha movido: nada que deshacer
+  }
+  // «Mover aquí»: a la posición que suena (con Q, al beat o al golpe más cercano)
+  moveCueHere(n, free = false) {
+    if (!this.track || !this.track.cues[n]) return false;
+    return this.moveCue(n, this.time, { free });
+  }
+  // ◂ / ▸ 1 beat (sigue el grid, también si es variable)
+  moveCueBeats(n, dir) {
+    const c = this.track && this.track.cues[n];
+    if (!c) return false;
+    const t = this.bpm ? this.beatTime(this.beatAt(c.t) + dir) : c.t + dir * 0.5;
+    return this.moveCue(n, t, { snap: false });
+  }
 
   // ---------------------------------------------------------------- loops
   setLoop(s, e, on = true, jump = false) {

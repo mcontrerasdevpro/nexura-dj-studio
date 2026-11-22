@@ -93,6 +93,7 @@ export function buildActions(app) {
     add(p + 'stutter', 'Stutter (play desde cue)', 'button', press(() => d.stutter()), g);
     add(p + 'start', 'Ir al inicio', 'button', press(() => d.toStart()), g);
     add(p + 'sync', 'Sync', 'button', press(() => d.toggleSync()), g, () => d.sync);
+    add(p + 'syncrealign', 'Realinear fase (borra tu ajuste con SYNC)', 'button', press(() => d.realignPhase()), g);
     add(p + 'syncoff', 'Sync off', 'button', press(() => d.setSync(false)), g);
     add(p + 'keylock', 'Key lock', 'button', press(() => d.toggleKeylock()), g, () => d.keylock);
     add(p + 'range', 'Rango de pitch', 'button', press(() => d.cycleRange()), g);
@@ -113,6 +114,7 @@ export function buildActions(app) {
     for (let i = 0; i < 8; i++) {
       add(p + 'hotcue' + (i + 1), `Hot cue ${i + 1}`, 'button', (on) => (on ? d.hotcue(i) : d.hotcueRelease(i)), g, () => !!d.track?.cues?.[i]);
       add(p + 'hotcueclear' + (i + 1), `Borrar hot cue ${i + 1}`, 'button', press(() => d.deleteCue(i)), g);
+      add(p + 'hotcuemove' + (i + 1), `Cue ${i + 1}: mover a la posición actual`, 'button', press(() => d.moveCueHere(i)), g);
     }
     for (let i = 0; i < 8; i++) {
       add(p + 'cueloop' + (i + 1), `Cue Loop ${i + 1}`, 'button', press(() => d.cueLoop(i)), g, () => !!d.track?.cueLoops?.[i]);

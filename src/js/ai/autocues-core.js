@@ -1,24 +1,29 @@
 // Cues automáticos (sin DOM: lo usan el asistente, tools/test-autocues.mjs y tools/cues-medir.mjs).
-// Como mucho 5 por tema, siempre en el mismo pad: 1 Inicio, 2 Entrada, 3 Drop, 4 Break, 5 Outro.
-// rc.9 (versión 3): las partes salen de lo que suena en cada compás, medido en la forma de onda ya analizada y con
-// el grid: si hay bombo (golpe grave en cada beat), cuántos bajos hay entre bombo y bombo y la energía. Cada compás
-// queda LLENO (bombo y bajos), BAJO (sin bajos, o sin bombo y con menos energía) o a medias. Con eso:
-// - Inicio: primer downbeat en el que suena la música.
-// - Entrada: primer bombo de verdad (3 de 4 compases seguidos con bombo). Si suena desde el principio, no hay.
-// - Break: tramo de 4+ compases que no está lleno y cae (2+ compases bajos) entre dos partes llenas; si hay varios,
-//   el más largo y profundo (el principal).
-// - Drop: donde vuelven el bombo y los bajos tras ese break. Sin break no se pone (no se inventa).
-// - Outro: tras la última parte llena, si la mezcla se vacía y no vuelve (8+ compases hasta el final).
-// - Cuadrados a frase: el compás del Drop (o de la Entrada) marca las frases; un cambio a ±1 compás de una frase de
-//   8 compases va a ella; si no, de 4; si no, de 2 (8 beats). Entre dos cues hay al menos 8 compases.
-// - Si una parte no se distingue con claridad, ese cue no se pone: mejor 3 buenos que 5 malos.
+// rc.11 (versión 4, fran6): los 4 cues que pone un DJ, siempre en el mismo pad:
+//   1 Beat · 2 Subidón · 3 Principal · 4 Salida
+// Las partes salen de lo que suena en cada compás, medido en la forma de onda ya analizada y con el grid: si hay
+// bombo (golpe grave en cada beat), cuántos bajos hay entre bombo y bombo y la energía. Cada compás queda LLENO
+// (bombo y bajos), BAJO (sin bajos, o sin bombo y con menos energía) o a medias. Con eso:
+// - 1 Beat: donde entra el bombo de verdad (3 de 4 compases seguidos); si suena desde el principio, el primer
+//   downbeat con música. (El «Inicio» de antes ya no es un cue aparte: es el principio de la pista.)
+// - Subidones: la entrada a una parte llena (6+ compases) tras una parte que no lo es (4+ compases) y que cae de
+//   verdad (2+ compases bajos o 6+ dB menos de bajos o energía).
+// - 3 Principal: el subidón de más peso (largo × contraste × intensidad), mejor tras un break de verdad y hacia la
+//   mitad del tema. 2 Subidón: el primero antes del principal. 4 Salida: el último después del principal o, si no
+//   hay, donde la mezcla empieza a vaciarse tras la última parte llena.
+// - Siempre en el primer beat del compás y cuadrados a frase: el Principal marca las frases; un cambio a ±1 compás
+//   de una frase de 8 compases va a ella; si no, de 4; si no, de 2 (8 beats). Entre dos cues, 8+ compases.
+// - Nunca en los últimos 25 s. Si una parte no se distingue con claridad, ese cue no se pone.
 // Sin forma de onda (pistas antiguas) se usa la curva de energía por frases, como antes (autoCuePointsEnergy).
 import * as Grid from '../audio/grid.js';
 
-export const AUTO_CUE_VERSION = 3;
-export const AUTO_CUE_SLOTS = ['start', 'entry', 'drop', 'break', 'outro'];
-export const AUTO_CUE_NAMES = { start: 'Inicio', entry: 'Entrada', drop: 'Drop', break: 'Break', outro: 'Outro' };
+export const AUTO_CUE_VERSION = 4;
+export const AUTO_CUE_SLOTS = ['beat', 'rise', 'main', 'exit'];
+export const AUTO_CUE_NAMES = { beat: '1 Beat', rise: '2 Subidón', main: '3 Principal', exit: '4 Salida' };
+// Equivalencias con los nombres de antes (v1-v3) para quien todavía los busque (sugerencias, informes…)
+export const AUTO_CUE_LEGACY = { start: 'beat', entry: 'beat', drop: 'main', break: null, outro: 'exit' };
 const MIN_GAP_BARS = 8;
+const TAIL_SEC = 25; // ningún cue automático en los últimos 25 s del tema
 
 // Energía media (0..1) de [t0, t1) con la forma de onda de 4 bytes por bloque [nivel, graves, medios, agudos]
 export function waveEnergy(wave) {
@@ -58,7 +63,7 @@ const quantile = (a, q) => { const v = [...a].sort((x, y) => x - y); return v[Ma
 const dB = (v, ref) => 20 * Math.log10(Math.max(v, 1e-4) / Math.max(ref, 1e-4));
 
 // Primer downbeat del grid (beat múltiplo de 4) en el que ya suena la música
-function startBeat(track, onset) {
+export function startBeat(track, onset) {
   const beatSec = 60 / track.bpm;
   let b0 = Math.ceil(Grid.beatAt(track, Math.max(0, onset - beatSec / 2)) - 1e-6);
   b0 = Math.ceil(b0 / 4) * 4;
@@ -116,64 +121,101 @@ export function autoCuePoints(track, { energy, onset = 0, wave = null } = {}) {
   if (!dur || start.t >= dur - 8) return [];
   let nBars = 0;
   while (barT(nBars + 1) <= dur) nBars++;
-  if (nBars < 24) return finish([start]);
+  if (nBars < 24) return finish(start.t <= dur - TAIL_SEC ? [{ type: 'beat', bar: 0, t: start.t }] : []);
   const F = barFeatures(track, wave, b0, nBars);
   const full = (k) => k >= 0 && k < nBars && F[k].state === 'F';
   const kickOn = (k) => k >= 0 && k < nBars && F[k].kick >= 0.75;
   const count = (a, b, fn) => { let c = 0; for (let k = Math.max(0, a); k < Math.min(nBars, b); k++) if (fn(k)) c++; return c; };
-  // tema sin partes (siempre igual o sin bombo): solo el Inicio
-  const nFull = count(0, nBars, full);
-  if (nFull < 8) return finish([start]);
-  const pts = [start];
-
   // Entrada: primer bombo de verdad (si no suena desde el principio)
   let entry = -1;
   for (let k = 0; k + 4 <= nBars; k++) if (kickOn(k) && count(k, k + 4, kickOn) >= 3) { entry = k; break; }
-  // Breaks: tramos no llenos de 4+ compases con 2+ compases bajos, entre partes llenas (un compás lleno suelto en
-  // medio, un redoble o un golpe, no corta el break)
-  const brks = [];
-  for (let k = Math.max(0, entry); entry >= 0 && k < nBars;) {
-    if (full(k)) { k++; continue; }
-    let e = k; while (e < nBars && (!full(e) || (!full(e + 1) && e + 1 < nBars && e > k))) e++;
-    const lows = count(k, e, (j) => F[j].state === 'L');
-    if (e - k >= 4 && lows >= 2 && count(k - 6, k, full) >= 4 && e + 4 <= nBars && count(e, e + 6, full) >= 4) {
-      const depth = -mean(F.slice(k, e).map(f => Math.min(f.bass, f.en + 4)), 0, e - k);
-      // vuelta: el primer compás (a ±2 del final del tramo) desde el que vuelven el bombo (3-4 golpes) y los bajos
-      // dos compases seguidos (la media de 3 compases puede correr el borde uno o dos compases)
-      const back = (j) => kickOn(j) && F[j].bass >= -5 && kickOn(j + 1) && F[j + 1].bass >= -5;
-      let d = Math.max(k + 4, e - 2); while (d <= Math.min(nBars - 2, e + 2) && !back(d)) d++;
-      if (!(d <= e + 2 && back(d))) d = e;
-      // empieza donde la caída ya es clara: 6+ dB menos de bajos o de energía que en la parte llena de antes
-      const pre = F.slice(Math.max(0, k - 4), k), pb = mean(pre.map(f => f.bass), 0, 4), pe = mean(pre.map(f => f.en), 0, 4);
-      let s = k; while (s < d - 4 && !(pb - F[s].bass >= 6 || pe - F[s].en >= 6)) s++;
-      if (s >= d - 4) s = k;
-      brks.push({ s, e: d, score: (e - k) * Math.max(1, depth) });
-    }
+  // v4: cue 1 · Beat = donde entra el bombo de verdad; si suena desde el principio, el primer compás
+  const beatBar = entry > 2 ? entry : 0;
+  const lastOk = (k) => barT(k) <= dur - TAIL_SEC; // nunca en los últimos ~25 s
+  // tema sin partes (siempre igual o sin bombo): solo el Beat
+  const nFull = count(0, nBars, full);
+  if (nFull < 8) return finish(lastOk(beatBar) ? [{ type: 'beat', bar: beatBar, t: barT(beatBar) }] : []);
+  return djCues({ F, nBars, full, kickOn, count, beatBar, barT, lastOk });
+}
+
+// v4 (fran6): los 4 cues de un DJ a partir de las partes LLENO / BAJO / a medias de cada compás.
+function djCues({ F, nBars, full, kickOn, count, beatBar, barT, lastOk }) {
+  const avg = (a, b, key) => mean(F.slice(Math.max(0, a), Math.min(nBars, b)).map(f => f[key]), 0, Math.max(1, Math.min(nBars, b) - Math.max(0, a)));
+  // partes llenas: tramos de 6+ compases llenos (un compás suelto a medias, un redoble, no los corta)
+  const runs = [];
+  for (let k = 0; k < nBars;) {
+    if (!full(k)) { k++; continue; }
+    let e = k + 1; while (e < nBars && (full(e) || (e + 1 < nBars && full(e + 1)))) e++;
+    if (e - k >= 6) runs.push({ s: k, e });
     k = e;
   }
-  // el principal: el de más peso (largo × profundo); a igualdad, el último
-  const brk = brks.reduce((a, b) => (!a || b.score >= a.score * 0.95 ? b : a), null);
-  // Outro: tras la última parte llena (4+ compases) la mezcla se vacía y no vuelve
-  let outro = -1, lastFull = -1;
-  for (let k = nBars - 1; k >= 3; k--) if (full(k) && full(k - 1) && full(k - 2) && full(k - 3)) { lastFull = k; break; }
-  if (lastFull >= 0 && nBars - (lastFull + 1) >= 8 && count(lastFull + 1, nBars, (j) => F[j].state === 'L' || F[j].bass <= -6) >= 3) outro = lastFull + 1;
-
-  // frases: el Drop (el cambio más claro) o, sin él, el Inicio marcan dónde empiezan; se cuadra a 8, 4 o 2 compases
-  const anchor = brk ? brk.e : 0;
+  // subidones: la entrada a una parte llena tras una parte que no lo es (4+ compases) y que cae de verdad
+  // (2+ compases bajos, o 6+ dB menos de bajos o de energía que la parte llena)
+  const rises = [];
+  for (const r of runs) {
+    let p = r.s; while (p > 0 && !full(p - 1)) p--;
+    const gap = r.s - p;
+    if (gap < 4) continue;
+    const lows = count(p, r.s, (j) => F[j].state === 'L');
+    const drop = Math.max(avg(r.s, r.s + 8, 'bass') - avg(p, r.s, 'bass'), avg(r.s, r.s + 8, 'en') - avg(p, r.s, 'en'));
+    if (lows < 2 && drop < 6) continue;
+    // la vuelta exacta: el primer compás (a ±2) con bombo (3-4 golpes) y bajos dos compases seguidos
+    const back = (j) => kickOn(j) && F[j].bass >= -5 && kickOn(j + 1) && F[j + 1].bass >= -5;
+    let d = Math.max(p + 2, r.s - 2); while (d <= Math.min(nBars - 2, r.s + 2) && !back(d)) d++;
+    if (!(d <= r.s + 2 && back(d))) d = r.s;
+    // ¿break de verdad? (había una parte llena antes: no es la intro)
+    const afterFull = count(p - 8, p, full) >= 4;
+    const len = r.e - d, inten = avg(d, r.e, 'en') + avg(d, r.e, 'bass') / 2; // dB respecto a lo normal (≤ 0)
+    rises.push({ bar: d, len, inten, depth: Math.min(24, Math.max(lows * 2, drop)), afterFull });
+  }
+  // 1 Beat: si el bombo entra solo y a los pocos compases (≤ 16) entra la línea de bajo (bombo y bajos a ≤ 7 dB de
+  // lo normal, 3 de 4 compases), el Beat va a esa entrada («el beat fuerte con el bajo»). Con una intro de bombo
+  // solo más larga (la de mezclar), el Beat se queda en el primer bombo y la entrada del bajo es el 2 · Subidón
+  const bassOn = (k) => kickOn(k) && F[k].bass >= -7;
+  let bassBar = -1;
+  for (let k = beatBar; k + 4 <= nBars; k++) if (bassOn(k) && count(k, k + 4, bassOn) >= 3) { bassBar = k; break; }
+  if (bassBar > beatBar && bassBar - beatBar <= 16 && bassBar / nBars <= 0.3 && lastOk(bassBar)) beatBar = bassBar;
+  // el principal: el subidón con más peso (largo × contraste × intensidad), mejor tras un break de verdad y hacia
+  // la mitad del tema
+  const pos = (k) => k / nBars;
+  const weight = (x) => Math.min(32, x.len) * (6 + x.depth) * Math.pow(10, x.inten / 20) * (x.afterFull ? 1.25 : 1) * (pos(x.bar) >= 0.25 && pos(x.bar) <= 0.72 ? 1.2 : 0.85);
+  // (un subidón pegado al Beat es la propia entrada del beat: no cuenta)
+  const cands = rises.filter(x => lastOk(x.bar) && x.bar >= beatBar + MIN_GAP_BARS);
+  // el principal sale de los subidones tras un break de verdad; la entrada desde la intro solo puede ser el 2
+  const afterBreak = cands.filter(x => x.afterFull);
+  const main = (afterBreak.length ? afterBreak : cands).reduce((a, x) => (!a || weight(x) > weight(a) * 1.02 ? x : a), null);
+  // frases: el principal (el cambio más claro) marca dónde empiezan; se cuadra a 8, 4 o 2 compases (±1)
+  const anchor = main ? main.bar : beatBar;
   const square = (k) => {
     for (const p of [8, 4, 2]) { const q = anchor + Math.round((k - anchor) / p) * p; if (Math.abs(q - k) <= 1) return q; }
     return k;
   };
-  if (entry > 1) pts.push({ type: 'entry', bar: square(entry) });
-  if (brk) { pts.push({ type: 'break', bar: square(brk.s) }); pts.push({ type: 'drop', bar: brk.e }); }
-  if (outro > 0) pts.push({ type: 'outro', bar: square(outro) });
-
-  // separación mínima: se queda el más importante (Drop > Inicio > Break > Outro > Entrada)
-  const prio = ['drop', 'start', 'break', 'outro', 'entry'];
+  const pts = [];
+  const add = (type, bar) => { if (bar != null && bar >= 0 && bar < nBars && lastOk(bar)) pts.push({ type, bar }); };
+  add('beat', beatBar > 0 ? square(beatBar) : 0);
+  if (main) {
+    add('main', main.bar);
+    // 2 · Subidón: el primero antes del principal (que no sea el propio Beat)
+    const r1 = cands.find(x => x.bar < main.bar - MIN_GAP_BARS + 1 && x.bar >= beatBar + MIN_GAP_BARS);
+    if (r1) add('rise', square(r1.bar));
+    // 4 · Salida: el último subidón después del principal; si no hay, donde la mezcla empieza a vaciarse tras la
+    // última parte llena (si queda tiempo para mezclar y no está pegado al final)
+    const r4 = cands.filter(x => x.bar >= main.bar + MIN_GAP_BARS).pop();
+    if (r4) add('exit', square(r4.bar));
+    else {
+      const last = runs[runs.length - 1];
+      if (last && last.e < nBars - 4 && last.e >= main.bar + 16 && count(last.e, nBars, (j) => F[j].state === 'L' || F[j].bass <= -6) >= 3) add('exit', square(last.e));
+    }
+  } else if (runs.length) {
+    // sin subidones claros: la primera parte llena (si no es el Beat) como Subidón; nada más (no se inventa)
+    const r = runs.find(x => x.s >= beatBar + MIN_GAP_BARS);
+    if (r && r.s / nBars < 0.4) add('rise', square(r.s));
+  }
+  // separación mínima: se queda el más importante (Principal > Beat > Salida > Subidón)
   const kept = [];
-  for (const type of prio) {
+  for (const type of ['main', 'beat', 'exit', 'rise']) {
     const p = pts.find(x => x.type === type);
-    if (p && p.bar >= 0 && p.bar < nBars && kept.every(k => Math.abs(k.bar - p.bar) >= MIN_GAP_BARS)) kept.push(p);
+    if (p && kept.every(k => Math.abs(k.bar - p.bar) >= MIN_GAP_BARS)) kept.push(p);
   }
   return finish(kept.map(p => ({ ...p, t: barT(p.bar) })));
 }
@@ -252,7 +294,12 @@ export function autoCuePointsEnergy(track, { energy, onset = 0 } = {}) {
     const p = pts.find(x => x.type === type);
     if (p && p.bar >= 0 && p.bar < E.length && kept.every(k => Math.abs(k.bar - p.bar) >= 16)) kept.push(p);
   }
-  return finish(kept.map(p => ({ ...p, t: barT(p.bar) })));
+  // v4: Entrada (o Inicio) → 1 Beat · Drop → 3 Principal · Outro → 4 Salida (el Break no es un cue de DJ)
+  const v4 = [];
+  const entry = kept.find(p => p.type === 'entry') || kept.find(p => p.type === 'start');
+  if (entry) v4.push({ type: 'beat', bar: entry.bar });
+  for (const p of kept) if (p.type === 'drop' || p.type === 'outro') v4.push({ type: AUTO_CUE_LEGACY[p.type], bar: p.bar });
+  return finish(v4.map(p => ({ ...p, t: barT(p.bar) })).filter(p => p.t <= dur - TAIL_SEC));
 }
 
 function finish(pts) {
@@ -260,9 +307,18 @@ function finish(pts) {
     .map(p => ({ ...p, name: AUTO_CUE_NAMES[p.type] }))
     .sort((a, b) => AUTO_CUE_SLOTS.indexOf(a.type) - AUTO_CUE_SLOTS.indexOf(b.type));
 }
+// ¿es un cue automático (de esta versión o de una anterior) de este tipo? Acepta los nombres de antes
+// («Drop» → Principal, «Outro» → Salida, «Entrada»/«Inicio» → Beat) para sugerencias e informes
+export function autoCueType(c) {
+  if (!c || !c.name) return null;
+  const n = String(c.name).toLowerCase();
+  for (const [k, v] of Object.entries(AUTO_CUE_NAMES)) if (n === v.toLowerCase()) return k;
+  const old = { inicio: 'start', entrada: 'entry', drop: 'drop', break: 'break', outro: 'outro' }[n];
+  return old ? AUTO_CUE_LEGACY[old] : null;
+}
 
 // Hot cues con los automáticos recalculados: los del usuario (sin `auto`) no se tocan nunca; cada automático
-// va a su pad (1-5) o, si el usuario lo tiene ocupado, al primer pad libre. Un punto con un cue del usuario a
+// va a su pad (1-4) o, si el usuario lo tiene ocupado, al primer pad libre. Un punto con un cue del usuario a
 // menos de 2 s no se duplica.
 export function mergeAutoCues(cues, points, colors) {
   const out = (cues || Array(8).fill(null)).map(c => (c && c.auto ? null : c));

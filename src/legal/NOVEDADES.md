@@ -1,5 +1,30 @@
 # Novedades de Nexura DJ Studio
 
+## 1.0.0-rc.11 · noviembre de 2026
+
+### Con SYNC, tu ajuste a oído se respeta
+- Con **SYNC** el tempo sigue al maestro como siempre, pero si **cuadras a oído** con el **BEND**, el **jog**, la **rueda del ratón** sobre el plato o tocando el plato, **la fase que dejas se queda**: el sync ya no la devuelve a donde estaba. Así puedes cuadrar un tema con el grid desplazado sin pelearte con la app.
+- Mientras tengas un ajuste tuyo, el botón **SYNC** se ve con un **borde discontinuo** y el medidor de fase muestra una **marca ámbar** en el sitio que has elegido (el punto sigue indicando la fase real; en verde si se mantiene tu ajuste).
+- Tu ajuste se borra al **pulsar SYNC otra vez**, al **cargar otro tema** o con **Mayús + clic en SYNC** («Realinear fase»: vuelve a cuadrar con el maestro sin quitar el SYNC). También hay una acción para la controladora: **«Realinear fase»**.
+- El **pitch fino ±0,01** con SYNC mueve el tempo de los dos decks a la vez (como el fader) y **ya no vuelve solo**.
+
+### Cada carpeta recuerda por dónde ibas
+- Al cambiar de carpeta, crate, smart crate, «Todas las pistas», historial o Prepare y volver, la lista vuelve **al mismo sitio**, con **el mismo orden** y **el mismo tema seleccionado**.
+- Cada fuente tiene **su propio orden** de columnas (se guarda entre sesiones). Ordenar VOCALES por BPM ya no cambia el orden de MELODIAS.
+- Si la lista se actualiza mientras la miras (subcarpetas que siguen llegando, el análisis que completa datos), **no salta**: el tema que tenías arriba sigue arriba.
+
+### Cues editables: muévelos sin perder el nombre
+- **Arrastra la marca de un cue** en la onda grande o en la general para moverlo. Con **Q** se pega al beat (o al golpe, como al ponerlo); con **Mayús**, se queda justo donde lo sueltas.
+- **Clic derecho en el pad** de un cue: **Mover aquí** (a lo que suena), **◂ / ▸ 1 beat**, **Renombrar**, **Color**, **Borrar** y **Deshacer**.
+- Un cue automático que muevas, renombres o cambies de color **pasa a ser tuyo**: conserva nombre y color y la app ya no lo recalcula.
+- **Ctrl + Z** deshace el último cambio de un cue (también borrarlo). Nueva acción para la controladora: **«Cue N: mover a la posición actual»**.
+
+### Cues automáticos como los pone un DJ: 4 cues numerados
+- Ahora son **4**, siempre en los mismos pads: **1 Beat** (entra el bombo con el bajo; o el principio si el tema empieza con beat), **2 Subidón** (el primer subidón), **3 Principal** (el subidón fuerte, por donde se suele entrar) y **4 Salida** (el último subidón o donde el tema empieza a vaciarse).
+- **Siempre en el primer beat del compás** y cuadrados a frase con el grid. **Nunca en los últimos 25 segundos.** Ya no hay «Inicio» ni «Outro» aparte.
+- Si una parte no está clara, ese cue **no se pone**: mejor 3 bien puestos que 4 dudosos. En temas con un solo break, el Principal puede quedar más tarde de la mitad (es donde está el subidón).
+- Los cues automáticos de la versión anterior se rehacen solos al cargar el tema. **Los tuyos, y los automáticos que hayas movido o renombrado, no se tocan nunca.**
+
 ## 1.0.0-rc.10 · noviembre de 2026
 
 ### Modo «sesión en directo»: la app no te interrumpe mientras pinchas

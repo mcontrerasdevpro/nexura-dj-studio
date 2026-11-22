@@ -69,11 +69,12 @@ export class Assistant {
     return list;
   }
 
-  // Cues automáticos (ai/autocues-core.js): como mucho 5 (Inicio, Entrada, Drop, Break, Outro), cuadrados a
+  // Cues automáticos (ai/autocues-core.js): como mucho 4 (1 Beat, 2 Subidón, 3 Principal, 4 Salida), cuadrados a
   // frase. Reemplaza los automáticos que hubiera y nunca toca los del usuario. `wave` = forma de onda analizada
   // (sin ella, la curva de energía por frases). Devuelve cuántos cues automáticos quedan.
   static AUTO_COLORS = { intro: CUE_COLORS[4], drop: CUE_COLORS[0], break: CUE_COLORS[6], outro: CUE_COLORS[1] };
-  static AUTO_COLOR_OF = { start: 'intro', entry: 'intro', drop: 'drop', break: 'break', outro: 'outro' };
+  // v4: 1 Beat · 2 Subidón · 3 Principal · 4 Salida (y los tipos de antes, por si alguien los usa)
+  static AUTO_COLOR_OF = { beat: 'intro', rise: 'break', main: 'drop', exit: 'outro', start: 'intro', entry: 'intro', drop: 'drop', break: 'break', outro: 'outro' };
   autoCues(track, { wave = null } = {}) {
     const energy = wave && wave.data ? waveEnergy(wave) : curveEnergy(track);
     const points = autoCuePoints(track, { energy, onset: wave && wave.data ? waveOnset(wave) : 0, wave: wave && wave.data ? wave : null });

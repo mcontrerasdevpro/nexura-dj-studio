@@ -236,7 +236,7 @@ export class SettingsUI {
     p.append(
       el('h3', {}, 'Asistente IA'),
       el('p', { class: 'set-note' }, 'Todo funciona en tu ordenador: ningún dato ni pista sale de él.'),
-      this.row('Cues automáticos al analizar', this.toggle('aiAutoCues'), 'Hasta 5 cues por tema en los cambios reales, cuadrados a frase (pads 1-5): Inicio, Entrada (primer bombo), Drop (vuelven el bombo y los bajos tras el break), Break (caen la energía y los bajos) y Outro (la mezcla se vacía). Si una parte no está clara, no se pone. Solo en pistas sin cues tuyos; los tuyos no se tocan nunca'),
+      this.row('Cues automáticos al analizar', this.toggle('aiAutoCues'), 'Los 4 cues de un DJ, en el primer beat del compás y cuadrados a frase (pads 1-4): 1 Beat (entra el bombo), 2 Subidón (el primero), 3 Principal (el subidón fuerte, por donde se suele entrar) y 4 Salida (el último subidón o donde empieza a vaciarse). Nunca en los últimos 25 s; si una parte no está clara, no se pone. Tus cues, y los automáticos que muevas o renombres, no se tocan nunca'),
       this.row('Compases de transición del Automix', this.number('automixBars', 4, 64, 4), 'Duración del fundido entre pistas (16 = transición larga clásica)'),
       ...this.stemsRows(),
       el('h3', {}, 'Pedir sets por texto (Ollama)'),

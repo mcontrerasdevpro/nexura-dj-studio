@@ -184,6 +184,21 @@ export class WaveDetail {
     this.bind();
   }
   setWave(w) { this.wave = w; if (w) colorize(w); this.dirty = true; }
+  // Hot cue bajo el puntero (su línea ±4 px o su etiqueta con el número, abajo); -1 si no hay
+  cueAt(clientX, clientY) {
+    const d = this.deck, m = this._map;
+    if (!d.track || !m || !d.track.cues) return -1;
+    const r = this.c.getBoundingClientRect(), x = clientX - r.left, y = clientY - r.top;
+    let best = -1, bd = 1e9;
+    d.track.cues.forEach((c, i) => {
+      if (!c) return;
+      const cx = (c.t - m.t0) * m.pxPerSec;
+      const onLabel = y >= m.h - 16 && x >= cx - 2 && x <= cx + 18;
+      const dist = Math.abs(x - cx);
+      if ((dist <= 4 || onLabel) && dist < bd) { bd = dist; best = i; }
+    });
+    return best;
+  }
   setZoom(z) { const v = clamp(z, 1.5, 40); if (v !== this.zoom) { this.zoom = v; this.dirty = true; } }
   bind() {
     // Arrastrar la forma de onda = scratch / búsqueda (ui/jog-gesture.js: con zona muerta, un clic no mueve)
@@ -201,17 +216,33 @@ export class WaveDetail {
     // modo «Editar grid»: arrastrar mueve la rejilla (no la reproducción); se guarda al soltar
     let gridDrag = false;
     const secPerPx = () => this.zoom * tempoScale(this.deck) / (canvasSize(this.c).w || 1);
+    // fran6: arrastrar el marcador de un hot cue lo mueve (con Q se pega al beat o al golpe; con Mayús, libre)
+    let cueDrag = null;
+    const timeAtX = (cx) => { const m = this._map; return m ? m.t0 + (cx - this.c.getBoundingClientRect().left) / m.pxPerSec : null; };
     this.c.addEventListener('pointerdown', (e) => {
       if (!this.deck.track || e.button !== 0) return;
       dragging = true; lastX = e.clientX;
       this.c.setPointerCapture(e.pointerId);
       if (this.deck.isYT) return ytSeek(e, true);
+      const hit = this.deck.gridEditing ? -1 : this.cueAt(e.clientX, e.clientY);
+      if (hit >= 0 && this.deck.cueDragStart(hit)) {
+        const t = timeAtX(e.clientX);
+        cueDrag = { n: hit, off: t != null ? this.deck.track.cues[hit].t - t : 0 };
+        this.c.classList.add('cue-dragging');
+        return;
+      }
       gridDrag = !!this.deck.gridEditing && this.deck.gridDragStart();
       if (!gridDrag) g.press(e.clientX);
     });
     this.c.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
+      if (!dragging) {
+        // sobre un marcador: cursor de mover
+        const over = this.deck.track && !this.deck.isYT && !this.deck.gridEditing && this.cueAt(e.clientX, e.clientY) >= 0;
+        if (over !== this._overCue) { this._overCue = over; this.c.classList.toggle('cue-hover', over); this.c.title = over ? 'Arrastra para mover el cue (con Q se pega al beat; con Mayús, libre)' : ''; }
+        return;
+      }
       if (this.deck.isYT) return ytSeek(e, false);
+      if (cueDrag) { const t = timeAtX(e.clientX); if (t != null) this.deck.cueDragTo(t + cueDrag.off, e.shiftKey); return; }
       if (gridDrag) {
         // Mayús: 10 veces más fino
         const dx = e.clientX - lastX; lastX = e.clientX;
@@ -224,6 +255,7 @@ export class WaveDetail {
       if (!dragging) return;
       dragging = false;
       if (this.deck.isYT) { if (e.type === 'pointerup' && e.clientX !== lastX) ytSeek(e, true); return; }
+      if (cueDrag) { cueDrag = null; this.c.classList.remove('cue-dragging'); this.deck.cueDragEnd(); return; }
       if (gridDrag) { gridDrag = false; this.deck.gridDragEnd(); return; }
       g.release();
     };
@@ -281,6 +313,7 @@ export class WaveDetail {
     const phx = Math.round(w * ph);
     const t0 = t - phx / pxPerSec;
     const xOf = (tt) => (tt - t0) * pxPerSec;
+    this._map = { t0, pxPerSec, h }; // para arrastrar los marcadores de los cues
 
     // forma de onda: mosaicos pre-dibujados (en la vista superior cada deck con su color identificativo;
     // en la vista «en deck», la coloración espectral real low/mid/high); lo ya reproducido, atenuado
@@ -460,8 +493,37 @@ export class WaveOverview {
     this.c = canvas; this.deck = deck; this.wave = null; this.cache = null;
     this.dirty = true; this.lastKey = '';
     for (const ev of ['track', 'cues', 'loop', 'grid', 'state', 'seek', 'duration']) deck.on(ev, () => { this.dirty = true; });
-    canvas.addEventListener('pointerdown', (e) => this.seekFrom(e));
-    canvas.addEventListener('pointermove', (e) => { if (e.buttons & 1) this.seekFrom(e); });
+    // fran6: arrastrar el marcador de un hot cue en la vista general lo mueve (Q: al beat / golpe; Mayús: libre)
+    let cueDrag = null;
+    const tAt = (e) => { const r = this.c.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width, 0, 1) * this.deck.duration; };
+    canvas.addEventListener('pointerdown', (e) => {
+      const d = this.deck;
+      const hit = e.button === 0 && d.track && !d.isYT && d.duration ? this.cueAt(e.clientX) : -1;
+      if (hit >= 0 && d.cueDragStart(hit)) {
+        canvas.setPointerCapture(e.pointerId);
+        cueDrag = { n: hit, off: d.track.cues[hit].t - tAt(e) };
+        canvas.classList.add('cue-dragging');
+        return;
+      }
+      this.seekFrom(e);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (cueDrag) { this.deck.cueDragTo(tAt(e) + cueDrag.off, e.shiftKey); return; }
+      if (e.buttons & 1) { this.seekFrom(e); return; }
+      const over = this.cueAt(e.clientX) >= 0;
+      if (over !== this._overCue) { this._overCue = over; canvas.classList.toggle('cue-hover', over); canvas.title = over ? 'Arrastra para mover el cue (con Q se pega al beat; con Mayús, libre)' : ''; }
+    });
+    const end = () => { if (!cueDrag) return; cueDrag = null; canvas.classList.remove('cue-dragging'); this.deck.cueDragEnd(); };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+  }
+  cueAt(clientX) {
+    const d = this.deck;
+    if (!d.track || d.isYT || !d.duration || !d.track.cues) return -1;
+    const r = this.c.getBoundingClientRect(), x = clientX - r.left;
+    let best = -1, bd = 5;
+    d.track.cues.forEach((c, i) => { if (!c) return; const dist = Math.abs(x - (c.t / d.duration) * r.width - 1); if (dist <= bd) { bd = dist; best = i; } });
+    return best;
   }
   seekFrom(e) {
     const d = this.deck;

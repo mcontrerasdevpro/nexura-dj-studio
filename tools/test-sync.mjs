@@ -151,17 +151,73 @@ r = await scenario('pitch del sincronizado', {
 });
 check('Mover el pitch del deck sincronizado cambia el tempo del grupo (los dos a ~130,6 BPM) y siguen en fase', Math.abs(r.A.currentBpm - r.B.currentBpm) < 0.01 && Math.abs(r.A.currentBpm - 128 * 1.02) < 0.05 && r.fase.p95 < OK_MS && r.B.sync, { a: r.A.currentBpm, b: r.B.currentBpm, fase: r.fase, sync: r.B.sync });
 
-// 7) nudge con el jog y pitch bend: la fase vuelve sola
-let back = null;
-r = await scenario('nudge', {
-  a: { bpm: 128 }, b: { bpm: 124 }, seconds: 60,
-  events: [
-    { t: 20, quiet: 0.6, fn: (app, A, B) => { for (let i = 0; i < 6; i++) later(i * 30, () => B.jogTurn(60)); } },
-    { t: 20.5, fn: (app, A, B) => { back = { at: 20.5, err: Math.abs(realPhaseMs(B, A)) }; } },
-    { t: 30, quiet: 1.5, fn: (app, A, B) => { B.bendDown(1); later(400, () => B.bendUp()); } }
-  ]
-});
-check('Nudge con el jog o pitch bend en un deck sincronizado: la fase vuelve (p95 < 5 ms fuera de esos momentos)', r.fase.p95 < OK_MS && back && back.err > 5, { fase: r.fase, nudge: back });
+// 7) fran6: con SYNC, el ajuste fino del DJ (pitch bend, nudge con el jog, rueda) se queda como desfase suyo
+// respecto al maestro; el sync mantiene ese desfase (no lo deshace). Re-sync, «Realinear fase» o cargar otro
+// tema lo borran.
+{
+  const snap = {};
+  const at = (k) => (app, A, B) => { snap[k] = realPhaseMs(B, A); };
+  r = await scenario('bend con SYNC', {
+    a: { bpm: 128 }, b: { bpm: 124 }, seconds: 75, from: 999,
+    events: [
+      { t: 15, fn: at('antes') },
+      { t: 20, fn: (app, A, B) => { B.bendDown(1); later(1200, () => B.bendUp()); } },
+      { t: 22, fn: at('trasSoltar') },
+      { t: 52, fn: at('a30s') },
+      { t: 53, fn: (app, A, B) => { B.setSync(false); B.setSync(true); } },
+      { t: 56, fn: at('resync') },
+      { t: 58, fn: (app, A, B) => { B.jogTurn(0); for (let i = 0; i < 6; i++) later(i * 30, () => B.jogTurn(60)); } },
+      { t: 60, fn: at('trasJog') },
+      { t: 70, fn: at('jog10s') },
+      { t: 71, fn: (app, A, B) => B.realignPhase() },
+      { t: 74, fn: at('realinear') }
+    ]
+  });
+  const s = Object.fromEntries(Object.entries(snap).map(([k, v]) => [k, +v.toFixed(2)]));
+  check('Bend con SYNC: tras soltar, la fase queda movida (> 5 ms) y el deck sigue con SYNC', Math.abs(s.trasSoltar) > 5 && r.B.sync, s);
+  check('…30 s después sigue igual (±2 ms): el sync respeta el ajuste', Math.abs(s.a30s - s.trasSoltar) < 2, s);
+  check('…y el BPM sigue siendo el del maestro', Math.abs(r.B.currentBpm - r.A.currentBpm) < 0.01, { a: r.A.currentBpm, b: r.B.currentBpm });
+  check('Re-sync (pulsar SYNC otra vez): la fase vuelve a 0 (< 3 ms)', Math.abs(s.resync) < 3, s);
+  check('Nudge con el jog con SYNC: la fase queda movida (> 5 ms) y 10 s después igual (±2 ms)', Math.abs(s.trasJog) > 5 && Math.abs(s.jog10s - s.trasJog) < 2, s);
+  check('«Realinear fase» (Mayús+SYNC): vuelve a 0 (< 3 ms) sin quitar el SYNC', Math.abs(s.realinear) < 3 && r.B.sync && r.B.phaseOffset === 0, { ...s, sync: r.B.sync });
+}
+// 7b) bend en el MAESTRO: el sincronizado no lo «persigue» deshaciendo el ajuste; la nueva fase se queda
+{
+  const snap = {};
+  r = await scenario('bend en el maestro', {
+    a: { bpm: 128 }, b: { bpm: 124 }, seconds: 50, from: 999,
+    events: [
+      { t: 20, fn: (app, A) => { A.bendDown(-1); later(500, () => A.bendUp()); } },
+      { t: 23, fn: (app, A, B) => { snap.tras = realPhaseMs(B, A); } },
+      { t: 48, fn: (app, A, B) => { snap.luego = realPhaseMs(B, A); } }
+    ]
+  });
+  check('Bend en el maestro con el otro en SYNC: el desfase que deja el DJ se mantiene (±2 ms en 25 s)', Math.abs(snap.tras) > 5 && Math.abs(snap.luego - snap.tras) < 2, snap);
+}
+// 7c) cargar otro tema borra el desfase del DJ
+{
+  procs.length = 0; tasks.length = 0;
+  const app = makeApp();
+  const [A, B] = app.decks;
+  await A.load(track(app, 'A', 128, 0.1), buffer(60));
+  await B.load(track(app, 'B', 124, 0.2), buffer(60));
+  B.sync = true; B.phaseOffset = 0.1;
+  await B.load(track(app, 'B2', 126, 0.2), buffer(60));
+  check('Cargar otro tema borra el desfase del DJ', B.phaseOffset === 0, { off: B.phaseOffset });
+}
+// 7d) pitch fino ±0,01 con SYNC (en el sincronizado): mueve el tempo del grupo y no se deshace solo
+{
+  const snap = {};
+  r = await scenario('pitch fino con SYNC', {
+    a: { bpm: 128 }, b: { bpm: 124 }, seconds: 45, from: 999,
+    events: [
+      { t: 10, fn: (app, A, B) => { snap.antes = B.currentBpm; for (let i = 0; i < 5; i++) B.pitchFine(0.01); } },
+      { t: 11, fn: (app, A, B) => { snap.tras = B.currentBpm; } },
+      { t: 41, fn: (app, A, B) => { snap.a30s = B.currentBpm; snap.maestro = A.currentBpm; snap.fase = realPhaseMs(B, A); } }
+    ]
+  });
+  check('Pitch fino +0,05 en el sincronizado: el grupo sube 0,05 BPM y 30 s después sigue (no vuelve), en fase', Math.abs(snap.tras - snap.antes - 0.05) < 0.002 && Math.abs(snap.a30s - snap.tras) < 0.002 && Math.abs(snap.maestro - snap.a30s) < 0.01 && Math.abs(snap.fase) < 5, snap);
+}
 
 // 8) decks parados. a) A suena (maestro) y SYNC en B parado: B toma el BPM y, al darle a play, entra en fase.
 r = await scenario('sincronizado parado', {

@@ -44,7 +44,8 @@ export class DeckUI {
     this.tempoEl = el('div', { class: 'd-tempo' });
     // medidor de fase respecto al maestro: punto en el centro = en fase (verde); a los lados, por delante o por detrás
     this.phaseDot = el('b', { class: 'pm-dot' });
-    this.phaseMeter = el('div', { class: 'phase-meter off', title: 'Fase respecto al deck maestro' }, el('i', { class: 'pm-c' }), this.phaseDot);
+    this.phaseOffMark = el('i', { class: 'pm-off' }); // desfase elegido por el DJ con SYNC (oculto si es 0)
+    this.phaseMeter = el('div', { class: 'phase-meter off', title: 'Fase respecto al deck maestro' }, el('i', { class: 'pm-c' }), this.phaseOffMark, this.phaseDot);
     this.elapsed = el('span', { class: 'elapsed' }, '00:00.0');
     this.remain = el('span', { class: 'remain' }, '-00:00.0');
     this.elapsedClock = el('div', { class: 'deck-clock elapsed-clock' }, el('small', {}, 'ELAPSED'), this.elapsed);
@@ -80,7 +81,8 @@ export class DeckUI {
     const platCol = el('div', { class: 'platter-col' }, platWrap);
 
     // --- botones de rendimiento
-    this.syncBtn = btn('SYNC', { cls: 'sync', onClick: () => d.toggleSync(), title: 'Sincroniza el tempo y la fase con el deck maestro (MASTER) y los mantiene' });
+    this.syncBtn = btn('SYNC', { cls: 'sync', onClick: (e) => (e && e.shiftKey ? d.realignPhase() : d.toggleSync()),
+      title: 'Sincroniza el tempo y la fase con el deck maestro (MASTER) y los mantiene. Si cuadras a oído (BEND, jog, rueda), el sync respeta tu ajuste. Mayús+clic: realinear la fase (borra tu ajuste)' });
     this.masterEl = btn('MASTER', { cls: 'micro master-ind', onClick: () => app.syncMgr.setMaster(d),
       title: 'Deck maestro del sync: los decks con SYNC siguen su tempo y su fase. Por defecto es el primero que suena; pulsa para que sea este' });
     this.keylockBtn = btn('KEY LOCK', { cls: 'small', onClick: () => d.toggleKeylock(), title: 'Mantiene la tonalidad al cambiar el tempo' });
@@ -331,13 +333,19 @@ export class DeckUI {
   padMenu(i, e) {
     const d = this.deck;
     if (d.padMode === 'hotcue' && d.track && d.track.cues[i]) {
+      const c = d.track.cues[i];
       this.app.contextMenu(e, [
+        { label: `Cue ${i + 1}${c.name ? ' · ' + c.name : ''}${c.auto ? ' (automático)' : ''}`, disabled: true },
+        { label: 'Mover aquí (a lo que suena)', fn: () => d.moveCueHere(i) },
+        { label: '◂ 1 beat antes', fn: () => d.moveCueBeats(i, -1) },
+        { label: '▸ 1 beat después', fn: () => d.moveCueBeats(i, 1) },
         { label: 'Renombrar…', fn: async () => { const n = await this.app.prompt('Nombre del cue', d.track.cues[i].name || ''); if (n != null) d.setCueName(i, n); } },
-        { label: 'Color', sub: CUE_COLORS.map(c => ({ label: '●', color: c, fn: () => d.setCueColor(i, c) })) },
-        d.track.cues[i].le
+        { label: 'Color', sub: CUE_COLORS.map(col => ({ label: '●', color: col, fn: () => d.setCueColor(i, col) })) },
+        c.le
           ? { label: 'Convertir en hot cue normal', fn: () => d.cueToggleLoop(i) }
           : { label: d.loop.e > d.loop.s ? 'Convertir en Cue Loop (loop actual)' : 'Convertir en Cue Loop', fn: () => d.cueToggleLoop(i) },
-        { label: 'Borrar hot cue', fn: () => d.deleteCue(i) }
+        { label: 'Borrar hot cue', fn: () => d.deleteCue(i) },
+        { label: 'Deshacer el último cambio de cue (Ctrl+Z)', disabled: !d.lastCueUndoAt(), fn: () => d.undoCue() }
       ]);
     } else if (d.padMode === 'cueloop' && d.track && d.track.cueLoops && d.track.cueLoops[i]) {
       this.app.contextMenu(e, [
@@ -370,6 +378,8 @@ export class DeckUI {
       p.classList.toggle('cueloop', !!s.loop);
       p.classList.toggle('active', !!s.active);
       p.classList.toggle('stemfx', !!s.fx);
+      const tip = d.padMode === 'hotcue' && d.track && d.track.cues[i] ? 'Clic derecho: mover aquí, ◂ ▸ 1 beat, renombrar, color o borrar. También puedes arrastrar su marca en la onda' : '';
+      if (p.title !== tip) p.title = tip;
     });
     const stemsMode = d.padMode === 'stems' && !!d.track && !d.isYT;
     this.padHint.classList.toggle('hidden', !stemsMode);
@@ -505,6 +515,8 @@ export class DeckUI {
     this.cueBtn.classList.toggle('on', !d.playing && !!t && Math.abs(time - d.cuePoint) < 0.03);
     this.playBtn.classList.toggle('on', d.playing);
     this.syncBtn.classList.toggle('on', d.sync);
+    const po = d.hasPhaseOffset;
+    if (this._po !== po) { this._po = po; this.syncBtn.classList.toggle('offset', po); }
     if (d.padMode === 'slicer' || d.padMode === 'roll' || d.padMode === 'sampler') {
       if (!this._padTick || performance.now() - this._padTick > 120) { this._padTick = performance.now(); this.refreshPads(); }
     }
@@ -530,14 +542,24 @@ export class DeckUI {
     if (this._pmOff !== off) { this._pmOff = off; this.phaseMeter.classList.toggle('off', off); }
     if (off) return;
     const ms = info.ms, abs = Math.abs(ms);
-    const cls = abs <= 10 ? 'ok' : abs <= 30 ? 'warn' : 'bad';
+    // con un desfase elegido por el DJ, el color dice si se mantiene ese ajuste (el punto sigue en la fase real)
+    const dev = d.hasPhaseOffset ? Math.abs(ms - info.offsetMs) : abs;
+    const cls = dev <= 10 ? 'ok' : dev <= 30 ? 'warn' : 'bad';
+    const ox = d.hasPhaseOffset ? Math.round(clamp(info.offsetBeat, -0.5, 0.5) * 2 * 30) : null;
+    if (ox !== this._pmOx) {
+      this._pmOx = ox;
+      this.phaseOffMark.style.display = ox == null ? 'none' : 'block';
+      if (ox != null) this.phaseOffMark.style.transform = `translateX(${ox}px)`;
+      this.phaseMeter.classList.toggle('user-offset', ox != null);
+    }
     const x = Math.round(clamp(info.beat, -0.5, 0.5) * 2 * 30); // ±30 px
     if (x !== this._pmX) { this._pmX = x; this.phaseDot.style.transform = `translateX(${x}px)`; }
     if (cls !== this._pmCls) { this._pmCls = cls; this.phaseMeter.dataset.state = cls; }
     const now = performance.now();
     if (now - (this._pmT || 0) > 300) {
       this._pmT = now;
-      const s = abs <= 10 ? `En fase con el Deck ${info.master.idx + 1}` : `${ms > 0 ? 'Por detrás' : 'Por delante'} del Deck ${info.master.idx + 1}: ${Math.round(abs)} ms`;
+      let s = abs <= 10 ? `En fase con el Deck ${info.master.idx + 1}` : `${ms > 0 ? 'Por detrás' : 'Por delante'} del Deck ${info.master.idx + 1}: ${Math.round(abs)} ms`;
+      if (d.hasPhaseOffset) s += ` · ajuste tuyo con SYNC: ${info.offsetMs > 0 ? '+' : ''}${Math.round(info.offsetMs)} ms (Mayús+SYNC para realinear)`;
       if (this.phaseMeter.title !== s) this.phaseMeter.title = s;
     }
   }
